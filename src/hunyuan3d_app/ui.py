@@ -250,8 +250,7 @@ def create_interface(app: Hunyuan3DStudio):
 
                                 def create_download_fn(model_name):
                                     def download_fn(force, progress=gr.Progress()):
-                                        yield from app.model_manager.download_model("image", model_name, use_hf_token=False,
-                                                                  force_redownload=force, progress=progress)
+                                        yield from app.model_manager.download_model("image", model_name, False, force, progress)
                                     return download_fn
                                 
                                 def create_delete_fn(model_name):
@@ -295,8 +294,7 @@ def create_interface(app: Hunyuan3DStudio):
 
                                 def create_gated_download_fn(model_name):
                                     def download_fn(force, progress=gr.Progress()):
-                                        yield from app.model_manager.download_model("image", model_name, use_hf_token=True,
-                                                                  force_redownload=force, progress=progress)
+                                        yield from app.model_manager.download_model("image", model_name, True, force, progress)
                                     return download_fn
                                 
                                 def create_gated_delete_fn(model_name):
@@ -384,7 +382,7 @@ def create_interface(app: Hunyuan3DStudio):
 
                                 def create_3d_download_fn(model_name):
                                     def download_fn(force, progress=gr.Progress()):
-                                        yield from app.model_manager.download_model("3d", model_name, force_redownload=force, progress=progress)
+                                        yield from app.model_manager.download_model("3d", model_name, False, force, progress)
                                     return download_fn
                                 
                                 def create_3d_delete_fn(model_name):

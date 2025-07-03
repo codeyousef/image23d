@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 SECRETS_DIR = Path.cwd() / ".secrets"
 HF_TOKEN_FILE = SECRETS_DIR / "hf_token.txt"
 
-def save_hf_token(token: str):
+def save_hf_token(token):
     """Base64 encode and save the Hugging Face token."""
     if not token:
         return
@@ -45,7 +45,7 @@ def save_hf_token(token: str):
     HF_TOKEN_FILE.write_bytes(encoded_token)
 
 
-def load_hf_token() -> Optional[str]:
+def load_hf_token():
     """Load and decode the Hugging Face token."""
     if not HF_TOKEN_FILE.exists():
         return None
@@ -74,7 +74,7 @@ class ModelManager:
         if self.hf_token:
             os.environ["HF_TOKEN"] = self.hf_token
 
-    def set_hf_token(self, token: str):
+    def set_hf_token(self, token):
         """Set Hugging Face token for gated models"""
         self.hf_token = token
         if token:
@@ -89,7 +89,7 @@ class ModelManager:
                 del os.environ["HF_TOKEN"]
             return "❌ Invalid token or token cleared"
 
-    def get_model_status(self) -> str:
+    def get_model_status(self):
         """Get current status of loaded models"""
         vram_used = 0
         if torch.cuda.is_available():
@@ -153,7 +153,7 @@ class ModelManager:
 
         return "".join(status_parts)
 
-    def check_model_complete(self, model_path: Path, model_type: str, model_name: str) -> bool:
+    def check_model_complete(self, model_path, model_type, model_name):
         """Check if a model is completely downloaded"""
         model_path = model_path.resolve()
         if not model_path.exists():
@@ -284,7 +284,7 @@ class ModelManager:
             has_weights = any(model_path.glob("*.safetensors")) or any(model_path.glob("*.bin"))
             return has_weights
 
-    def check_missing_components(self, model_type: str, model_name: str) -> list:
+    def check_missing_components(self, model_type, model_name):
         """Check for missing components required for optimized image generation
 
         Args:
@@ -354,7 +354,7 @@ class ModelManager:
 
         return missing_components
 
-    def download_missing_components(self, model_type: str, model_name: str, progress=gr.Progress()):
+    def download_missing_components(self, model_type, model_name, progress):
         """Download missing components for a model
 
         Args:
@@ -701,8 +701,7 @@ class ModelManager:
 </div>
 """
 
-    def download_model(self, model_type: str, model_name: str, use_hf_token: bool = False,
-                       force_redownload: bool = False, progress=gr.Progress()):
+    def download_model(self, model_type, model_name, use_hf_token, force_redownload, progress):
         """Download model with detailed progress tracking
 
         This method includes several reliability features for large downloads:
@@ -1597,7 +1596,7 @@ class ModelManager:
 
         return True  # Memory is fine
 
-    def _load_gguf_model(self, model_path: Path, config, device_to_use: str, dtype_to_use, progress):
+    def _load_gguf_model(self, model_path, config, device_to_use, dtype_to_use, progress):
         """Download and prepare GGUF model components."""
         
         try:
@@ -1713,7 +1712,7 @@ class ModelManager:
 
         logger.info(log_message)
 
-    def load_image_model(self, model_name: str, current_model=None, current_model_name=None, device=None, progress=gr.Progress()):
+    def load_image_model(self, model_name, current_model, current_model_name, device, progress):
         """Load an image generation model"""
         try:
             # Get memory manager
@@ -2135,7 +2134,7 @@ class ModelManager:
 
             return error_message, None, None
 
-    def load_hunyuan3d_model(self, model_name: str, current_model=None, current_model_name=None, device=None, progress=gr.Progress()):
+    def load_hunyuan3d_model(self, model_name, current_model, current_model_name, device, progress):
         """Load a Hunyuan3D model"""
         try:
             # Check if model is already loaded
@@ -2210,13 +2209,13 @@ class ModelManager:
         gc.collect()
 
     @property
-    def any_image_model_downloaded(self) -> bool:
+    def any_image_model_downloaded(self):
         """Check if any image model is downloaded"""
         image_model_dir = self.models_dir / "image"
         return image_model_dir.exists() and any(d.is_dir() for d in image_model_dir.iterdir())
 
     @property
-    def any_hunyuan_model_downloaded(self) -> bool:
+    def any_hunyuan_model_downloaded(self):
         """Check if any hunyuan model is downloaded"""
         hunyuan_model_dir = self.models_dir / "3d"
         return hunyuan_model_dir.exists() and any(d.is_dir() for d in hunyuan_model_dir.iterdir())
