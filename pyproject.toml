@@ -3,8 +3,8 @@ name = "hunyuan3d-app"
 version = "0.1.0"
 requires-python = ">=3.10,<3.12"
 dependencies = [
-    # Core - Fixed compatible versions
-    "gradio>=4.0.0",
+    # Core - Fixed compatible versions  
+    "gradio==4.44.0",  # Known stable version without schema issues
     "torch==2.5.1",
     "torchvision==0.20.1", 
     "torchaudio==2.5.1",

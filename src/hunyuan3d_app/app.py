@@ -2,6 +2,14 @@ import logging
 import sys
 import os
 
+# Apply gradio schema fix before any other gradio imports
+try:
+    from .gradio_fix import apply_gradio_fix
+    apply_gradio_fix()
+except (ImportError, AttributeError):
+    # Gradio fix not available, continue without it
+    pass
+
 # Handle imports differently when run as a script vs. imported as a module
 if __name__ == "__main__":
     # When run directly, use absolute imports
@@ -9,6 +17,14 @@ if __name__ == "__main__":
     parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     if parent_dir not in sys.path:
         sys.path.insert(0, parent_dir)
+    
+    # Apply gradio fix for direct execution
+    try:
+        from hunyuan3d_app.gradio_fix import apply_gradio_fix
+        apply_gradio_fix()
+    except (ImportError, AttributeError):
+        pass
+        
     from hunyuan3d_app.hunyuan3d_studio import Hunyuan3DStudio
     from hunyuan3d_app.ui import create_interface
     from hunyuan3d_app.gpu_optimizer import get_gpu_optimizer
@@ -81,5 +97,6 @@ if __name__ == "__main__":
         share=False,
         server_name="0.0.0.0",
         server_port=port,
-        inbrowser=True
+        inbrowser=True,
+        show_api=False  # Disable API documentation generation to avoid schema errors
     )
