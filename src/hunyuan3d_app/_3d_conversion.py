@@ -25,14 +25,14 @@ class ThreeDConverter:
 
     def convert_to_3d(
             self,
-            hunyuan3d_model: Any,
-            hunyuan3d_model_name: str,
-            image: Image.Image,
-            num_views: int,
-            mesh_resolution: int,
-            texture_resolution: int,
-            progress=gr.Progress()
-    ) -> Tuple[Optional[str], Optional[Image.Image], str]:
+            hunyuan3d_model,
+            hunyuan3d_model_name,
+            image,
+            num_views,
+            mesh_resolution,
+            texture_resolution,
+            progress
+    ):
         """Convert image to 3D model"""
         try:
             # Reset stop flag at the beginning of conversion

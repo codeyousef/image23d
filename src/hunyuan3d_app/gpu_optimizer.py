@@ -67,7 +67,7 @@ class GPUOptimizer:
         self.gpu_info = self._detect_gpu()
         self.settings = self._get_optimal_settings()
         
-    def _detect_gpu(self) -> Dict:
+    def _detect_gpu(self):
         """Detect GPU properties and capabilities."""
         info = {
             "available": torch.cuda.is_available(),
@@ -106,7 +106,7 @@ class GPUOptimizer:
                        
         return info
         
-    def _get_optimal_settings(self) -> Dict:
+    def _get_optimal_settings(self):
         """Get optimal settings for detected GPU."""
         if not self.gpu_info["available"]:
             return {}
@@ -183,7 +183,7 @@ class GPUOptimizer:
                 
         logger.info(f"Applied optimizations for {self.gpu_info['architecture']} GPU")
         
-    def get_recommended_dtype(self) -> torch.dtype:
+    def get_recommended_dtype(self):
         """Get recommended dtype based on GPU capabilities."""
         if not self.gpu_info["available"]:
             return torch.float32
@@ -194,7 +194,7 @@ class GPUOptimizer:
         else:
             return torch.float32
             
-    def should_use_xformers(self) -> bool:
+    def should_use_xformers(self):
         """Check if xformers should be used."""
         if not self.gpu_info["available"]:
             return False
@@ -203,7 +203,7 @@ class GPUOptimizer:
         return (self.settings.get("use_flash_attn", False) and 
                 self.gpu_info["vram_gb"] >= 8)
                 
-    def get_info_dict(self) -> Dict:
+    def get_info_dict(self):
         """Get GPU info and settings as a dictionary."""
         return {
             "gpu_info": self.gpu_info,
@@ -214,7 +214,7 @@ class GPUOptimizer:
 # Global instance
 _gpu_optimizer = None
 
-def get_gpu_optimizer() -> GPUOptimizer:
+def get_gpu_optimizer():
     """Get or create the global GPU optimizer instance."""
     global _gpu_optimizer
     if _gpu_optimizer is None:

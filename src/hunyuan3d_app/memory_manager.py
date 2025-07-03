@@ -18,7 +18,7 @@ class MemoryManager:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.monitoring_enabled = True
         
-    def get_memory_stats(self) -> Dict:
+    def get_memory_stats(self):
         """Get current memory statistics."""
         stats = {
             "ram": {
@@ -85,7 +85,7 @@ class MemoryManager:
             
         logger.info("Performed aggressive cache cleanup")
         
-    def monitor_memory_usage(self, func: Callable) -> Callable:
+    def monitor_memory_usage(self, func):
         """Decorator to monitor memory usage of a function."""
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -115,7 +115,7 @@ class MemoryManager:
             return result
         return wrapper
         
-    def ensure_memory_available(self, required_gb: float, device: str = "cuda") -> bool:
+    def ensure_memory_available(self, required_gb, device):
         """Ensure sufficient memory is available, cleaning if necessary."""
         if device == "cuda" and torch.cuda.is_available():
             available = torch.cuda.mem_get_info()[0] / (1024**3)
@@ -140,7 +140,7 @@ class MemoryManager:
                     
         return True
         
-    def get_memory_summary(self) -> str:
+    def get_memory_summary(self):
         """Get a formatted memory summary string."""
         stats = self.get_memory_stats()
         summary = []
@@ -179,7 +179,7 @@ class MemoryManager:
 # Global instance
 _memory_manager = None
 
-def get_memory_manager() -> MemoryManager:
+def get_memory_manager():
     """Get or create the global memory manager instance."""
     global _memory_manager
     if _memory_manager is None:

@@ -37,7 +37,7 @@ class ImageGenerator:
         """Reset the stop generation flag"""
         self.stop_generation_flag = False
 
-    def remove_background(self, image: Image.Image) -> Image.Image:
+    def remove_background(self, image):
         """Remove background from image"""
         try:
             if not self.background_remover:
@@ -57,17 +57,17 @@ class ImageGenerator:
     @profile_generation
     def generate_image(
             self,
-            image_model: Any,
-            image_model_name: str,
-            prompt: str,
-            negative_prompt: str,
-            width: int,
-            height: int,
-            steps: int,
-            guidance_scale: float,
-            seed: int,
-            progress=gr.Progress()
-    ) -> Tuple[Image.Image, str]:
+            image_model,
+            image_model_name,
+            prompt,
+            negative_prompt,
+            width,
+            height,
+            steps,
+            guidance_scale,
+            seed,
+            progress
+    ):
         """Generate an image from text prompt using a background thread"""
 
         # Reset stop flag at the beginning of generation

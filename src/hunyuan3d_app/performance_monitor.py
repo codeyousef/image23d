@@ -34,7 +34,7 @@ class PerformanceMonitor:
             except:
                 logger.warning("Could not initialize nvitop device")
                 
-    def get_gpu_stats(self) -> Dict:
+    def get_gpu_stats(self):
         """Get detailed GPU statistics."""
         stats = {}
         
@@ -62,7 +62,7 @@ class PerformanceMonitor:
                     
         return stats
         
-    def get_system_stats(self) -> Dict:
+    def get_system_stats(self):
         """Get system performance statistics."""
         cpu_percent = psutil.cpu_percent(interval=0.1)
         memory = psutil.virtual_memory()
@@ -108,7 +108,7 @@ class PerformanceMonitor:
                 "timestamp": time.time()
             }
             
-    def benchmark_function(self, func: Callable, *args, **kwargs) -> tuple[Any, Dict]:
+    def benchmark_function(self, func, *args, **kwargs):
         """Benchmark a function and return result with metrics."""
         start_time = time.time()
         start_gpu_stats = self.get_gpu_stats()
@@ -137,7 +137,7 @@ class PerformanceMonitor:
             
         return result, metrics
         
-    def get_performance_summary(self) -> str:
+    def get_performance_summary(self):
         """Get a formatted performance summary."""
         lines = ["Performance Summary:"]
         
@@ -170,7 +170,7 @@ class PerformanceMonitor:
 # Global instance
 _performance_monitor = None
 
-def get_performance_monitor() -> PerformanceMonitor:
+def get_performance_monitor():
     """Get or create the global performance monitor instance."""
     global _performance_monitor
     if _performance_monitor is None:
@@ -178,7 +178,7 @@ def get_performance_monitor() -> PerformanceMonitor:
     return _performance_monitor
     
 
-def profile_generation(func: Callable) -> Callable:
+def profile_generation(func):
     """Decorator to profile image/3D generation functions."""
     @wraps(func)
     def wrapper(*args, **kwargs):

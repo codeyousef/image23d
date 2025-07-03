@@ -32,7 +32,7 @@ class SystemRequirementsChecker:
         self.errors = []
         self.recommendations = []
 
-    def check_all(self) -> Dict[str, Any]:
+    def check_all(self):
         """Run all system requirement checks and return the results"""
         # Computational requirements
         self.check_gpu()
@@ -550,7 +550,7 @@ class SystemRequirementsChecker:
 
         self.results["optional_enhancements"] = enhancements
 
-    def get_html_report(self) -> str:
+    def get_html_report(self):
         """Generate an HTML report of the system requirements check"""
         if not self.results:
             self.check_all()
@@ -758,12 +758,12 @@ class SystemRequirementsChecker:
 
         return html
 
-def check_system_requirements() -> Dict[str, Any]:
+def check_system_requirements():
     """Run system requirements check and return results"""
     checker = SystemRequirementsChecker()
     return checker.check_all()
 
-def get_system_requirements_html() -> str:
+def get_system_requirements_html():
     """Get HTML report of system requirements check"""
     checker = SystemRequirementsChecker()
     return checker.get_html_report()

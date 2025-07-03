@@ -39,16 +39,16 @@ class Hunyuan3DStudio:
         self.image_generator = ImageGenerator(self.device, OUTPUT_DIR)
         self.three_d_converter = ThreeDConverter(CACHE_DIR, OUTPUT_DIR)
 
-    def set_hf_token(self, token: str):
+    def set_hf_token(self, token):
         return self.model_manager.set_hf_token(token)
 
-    def get_model_status(self) -> str:
+    def get_model_status(self):
         return self.model_manager.get_model_status()
 
-    def check_model_complete(self, model_path: Path, model_type: str, model_name: str) -> bool:
+    def check_model_complete(self, model_path, model_type, model_name):
         return self.model_manager.check_model_complete(model_path, model_type, model_name)
 
-    def check_missing_components(self, model_type: str, model_name: str) -> list:
+    def check_missing_components(self, model_type, model_name):
         """Check for missing components required for optimized image generation"""
         return self.model_manager.check_missing_components(model_type, model_name)
 
@@ -105,7 +105,7 @@ class Hunyuan3DStudio:
     def unload_models(self):
         self.model_manager.unload_models()
 
-    def check_system_requirements(self) -> str:
+    def check_system_requirements(self):
         """Check system requirements and return HTML report"""
         return get_system_requirements_html()
     
