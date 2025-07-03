@@ -19,31 +19,31 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 tempfile.tempdir = str(TEMP_DIR)
 
 
-@dataclass
 class ImageModelConfig:
     """Configuration for image generation models"""
-    name: str
-    repo_id: str
-    pipeline_class: str
-    size: str
-    vram_required: str
-    description: str
-    optimal_resolution: Tuple[int, int]
-    supports_refiner: bool = False
-    is_gguf: bool = False
-    gguf_file: str = ""
+    def __init__(self, name, repo_id, pipeline_class, size, vram_required, description, optimal_resolution, supports_refiner=False, is_gguf=False, gguf_file=""):
+        self.name = name
+        self.repo_id = repo_id
+        self.pipeline_class = pipeline_class
+        self.size = size
+        self.vram_required = vram_required
+        self.description = description
+        self.optimal_resolution = optimal_resolution
+        self.supports_refiner = supports_refiner
+        self.is_gguf = is_gguf
+        self.gguf_file = gguf_file
 
 
-@dataclass
 class QualityPreset:
     """Quality preset configurations"""
-    name: str
-    image_steps: int
-    image_guidance: float
-    use_refiner: bool
-    num_3d_views: int
-    mesh_resolution: int
-    texture_resolution: int
+    def __init__(self, name, image_steps, image_guidance, use_refiner, num_3d_views, mesh_resolution, texture_resolution):
+        self.name = name
+        self.image_steps = image_steps
+        self.image_guidance = image_guidance
+        self.use_refiner = use_refiner
+        self.num_3d_views = num_3d_views
+        self.mesh_resolution = mesh_resolution
+        self.texture_resolution = texture_resolution
 
 
 # --- Model Configurations ---

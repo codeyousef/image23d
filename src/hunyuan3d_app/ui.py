@@ -254,9 +254,7 @@ def create_interface(app: Hunyuan3DStudio):
                                     return download_fn
                                 
                                 def create_delete_fn(model_name):
-                                    def delete_fn():
-                                        return app.delete_model("image", model_name)
-                                    return delete_fn
+                                    return lambda: app.delete_model("image", model_name)
 
                                 download_img_btn.click(
                                     fn=create_download_fn(name),
@@ -272,6 +270,10 @@ def create_interface(app: Hunyuan3DStudio):
                                 delete_img_btn.click(
                                     fn=create_delete_fn(name),
                                     outputs=[status_html]
+                                ).then(
+                                    # Update model selection dropdowns after deletion
+                                    fn=app.get_model_selection_data,
+                                    outputs=[image_model, hunyuan_model, manual_img_model, manual_3d_model]
                                 )
 
                         # Gated models section
@@ -298,9 +300,7 @@ def create_interface(app: Hunyuan3DStudio):
                                     return download_fn
                                 
                                 def create_gated_delete_fn(model_name):
-                                    def delete_fn():
-                                        return app.delete_model("image", model_name)
-                                    return delete_fn
+                                    return lambda: app.delete_model("image", model_name)
 
                                 download_gated_btn.click(
                                     fn=create_gated_download_fn(name),
@@ -316,6 +316,10 @@ def create_interface(app: Hunyuan3DStudio):
                                 delete_gated_btn.click(
                                     fn=create_gated_delete_fn(name),
                                     outputs=[gated_status]
+                                ).then(
+                                    # Update model selection dropdowns after deletion
+                                    fn=app.get_model_selection_data,
+                                    outputs=[image_model, hunyuan_model, manual_img_model, manual_3d_model]
                                 )
 
                         # GGUF Models section
@@ -342,9 +346,7 @@ def create_interface(app: Hunyuan3DStudio):
                                     return download_fn
                                 
                                 def create_gguf_delete_fn(model_name):
-                                    def delete_fn():
-                                        return app.delete_gguf_model(model_name)
-                                    return delete_fn
+                                    return lambda: app.delete_gguf_model(model_name)
 
                                 download_gguf_btn.click(
                                     fn=create_gguf_download_fn(name),
@@ -360,6 +362,10 @@ def create_interface(app: Hunyuan3DStudio):
                                 delete_gguf_btn.click(
                                     fn=create_gguf_delete_fn(name),
                                     outputs=[gguf_status]
+                                ).then(
+                                    # Update model selection dropdowns after deletion
+                                    fn=app.get_model_selection_data,
+                                    outputs=[image_model, hunyuan_model, manual_img_model, manual_3d_model]
                                 )
 
                     with gr.Column():
@@ -386,9 +392,7 @@ def create_interface(app: Hunyuan3DStudio):
                                     return download_fn
                                 
                                 def create_3d_delete_fn(model_name):
-                                    def delete_fn():
-                                        return app.delete_model("3d", model_name)
-                                    return delete_fn
+                                    return lambda: app.delete_model("3d", model_name)
 
                                 download_3d_btn.click(
                                     fn=create_3d_download_fn(name),
@@ -404,6 +408,10 @@ def create_interface(app: Hunyuan3DStudio):
                                 delete_3d_btn.click(
                                     fn=create_3d_delete_fn(name),
                                     outputs=[status_3d]
+                                ).then(
+                                    # Update model selection dropdowns after deletion
+                                    fn=app.get_model_selection_data,
+                                    outputs=[image_model, hunyuan_model, manual_img_model, manual_3d_model]
                                 )
 
                 # Memory management
@@ -455,9 +463,7 @@ def create_interface(app: Hunyuan3DStudio):
                                     return download_fn
                                 
                                 def create_comp_delete_fn(component_name):
-                                    def delete_fn():
-                                        return app.delete_component(component_name)
-                                    return delete_fn
+                                    return lambda: app.delete_component(component_name)
                                 
                                 download_comp_btn.click(
                                     fn=create_comp_download_fn(comp_key),
