@@ -11,6 +11,9 @@ import torch
 from PIL import Image
 from transformers import pipeline
 
+from .performance_monitor import get_performance_monitor, profile_generation
+from .memory_manager import get_memory_manager
+
 logger = logging.getLogger(__name__)
 
 # Global queue for tracking active generation tasks
@@ -51,6 +54,7 @@ class ImageGenerator:
             logger.error(f"Error removing background: {str(e)}")
             return image
 
+    @profile_generation
     def generate_image(
             self,
             image_model: Any,
@@ -91,19 +95,37 @@ class ImageGenerator:
 
         # Define the generation function that will run in a background thread
         def generate_in_background():
+            start_time = time.time()
             try:
                 # Acquire lock to ensure thread safety
                 with generation_lock:
                     # Create generator with seed
                     # Check if the model has a specific device or is using device_map
-                    if hasattr(image_model, 'device') and image_model.device != torch.device("meta"):
-                        # Use the model's device for the generator
-                        generator_device = image_model.device
-                    else:
-                        # Fall back to the default device
-                        generator_device = self.device
+                    try:
+                        if hasattr(image_model, 'device') and image_model.device != torch.device("meta"):
+                            # Use the model's device for the generator
+                            generator_device = image_model.device
+                        else:
+                            # Fall back to the default device
+                            generator_device = self.device
 
-                    generator = torch.Generator(generator_device).manual_seed(seed)
+                        # For FluxPipeline models, check if we can use GPU generator
+                        model_type = type(image_model).__name__
+                        if "FluxPipeline" in model_type:
+                            # Try to use GPU generator if model is on GPU
+                            if generator_device == "cuda":
+                                logger.info("FluxPipeline detected, attempting to use GPU generator")
+                            else:
+                                logger.info("FluxPipeline detected, using CPU generator")
+                                generator_device = "cpu"
+
+                        generator = torch.Generator(generator_device).manual_seed(seed)
+                        logger.info(f"Created generator on device: {generator_device}")
+                    except Exception as gen_error:
+                        logger.warning(f"Error creating generator with specific device: {str(gen_error)}")
+                        # Fall back to default generator without specifying device
+                        generator = torch.Generator().manual_seed(seed)
+                        logger.info("Created generator with default device")
 
                     # Free up memory before generation
                     import gc
@@ -114,18 +136,38 @@ class ImageGenerator:
                     with torch.no_grad():
                         try:
                             # Generate the image with callback for progress updates
-                            # Set callback_steps=1 to update on every step
-                            image = image_model(
-                                prompt=prompt,
-                                negative_prompt=negative_prompt,
-                                width=width,
-                                height=height,
-                                num_inference_steps=steps,
-                                guidance_scale=guidance_scale,
-                                generator=generator,
-                                callback_on_step_end=progress_callback,
-                                callback_steps=1  # Update on every step
-                            ).images[0]
+                            # Check if the model is a FluxPipeline
+                            model_type = type(image_model).__name__
+                            is_flux_pipeline = "FluxPipeline" in model_type
+                            logger.info(f"Model type: {model_type}, is FluxPipeline: {is_flux_pipeline}")
+
+                            if is_flux_pipeline:
+                                # FluxPipeline doesn't accept callback_steps parameter
+                                logger.info("Using FluxPipeline-specific parameters (without callback_steps)")
+                                image = image_model(
+                                    prompt=prompt,
+                                    negative_prompt=negative_prompt,
+                                    width=width,
+                                    height=height,
+                                    num_inference_steps=steps,
+                                    guidance_scale=guidance_scale,
+                                    generator=generator,
+                                    callback_on_step_end=progress_callback
+                                ).images[0]
+                            else:
+                                # For other pipelines, include callback_steps
+                                logger.info("Using standard pipeline parameters (with callback_steps)")
+                                image = image_model(
+                                    prompt=prompt,
+                                    negative_prompt=negative_prompt,
+                                    width=width,
+                                    height=height,
+                                    num_inference_steps=steps,
+                                    guidance_scale=guidance_scale,
+                                    generator=generator,
+                                    callback_on_step_end=progress_callback,
+                                    callback_steps=1  # Update on every step
+                                ).images[0]
                         except StopIteration as e:
                             # Handle user-initiated stop
                             logger.info(f"Generation stopped by user at step {result_container['current_step']}/{steps}")
@@ -138,22 +180,98 @@ class ImageGenerator:
                             return
                         except RuntimeError as e:
                             # Check if this is a device mismatch error
-                            if "device" in str(e).lower() and "meta" in str(e).lower():
+                            if ("device" in str(e).lower() and "meta" in str(e).lower()) or "tensor on device meta is not on the expected device" in str(e).lower():
                                 logger.error(f"Device mismatch error: {str(e)}")
                                 # Try again without specifying a generator (let the model handle device internally)
                                 logger.info("Retrying without explicit generator device...")
                                 try:
-                                    image = image_model(
-                                        prompt=prompt,
-                                        negative_prompt=negative_prompt,
-                                        width=width,
-                                        height=height,
-                                        num_inference_steps=steps,
-                                        guidance_scale=guidance_scale,
-                                        # No generator specified, let the model handle it
-                                        callback_on_step_end=progress_callback,
-                                        callback_steps=1  # Update on every step
-                                    ).images[0]
+                                    # Check if the model is a FluxPipeline
+                                    model_type = type(image_model).__name__
+                                    is_flux_pipeline = "FluxPipeline" in model_type
+                                    logger.info(f"Retry - Model type: {model_type}, is FluxPipeline: {is_flux_pipeline}")
+
+                                    if is_flux_pipeline:
+                                        # FluxPipeline doesn't accept callback_steps parameter
+                                        logger.info("Retry - Using FluxPipeline-specific parameters (without callback_steps)")
+                                        # Create a CPU generator for FluxPipeline to avoid device mismatch
+                                        cpu_generator = torch.Generator("cpu").manual_seed(seed)
+                                        logger.info("Created CPU generator for FluxPipeline retry")
+                                        try:
+                                            image = image_model(
+                                                prompt=prompt,
+                                                negative_prompt=negative_prompt,
+                                                width=width,
+                                                height=height,
+                                                num_inference_steps=steps,
+                                                guidance_scale=guidance_scale,
+                                                generator=cpu_generator,
+                                                callback_on_step_end=progress_callback
+                                            ).images[0]
+                                        except RuntimeError as e2:
+                                            # If we still get a device mismatch error, try one final approach
+                                            if "tensor on device meta is not on the expected device" in str(e2).lower():
+                                                logger.error(f"Still getting device mismatch in retry: {str(e2)}")
+                                                logger.info("Final retry attempt - using CPU device for all operations")
+
+                                                # Keep model on GPU instead of moving to CPU
+                                                logger.warning("Device mismatch detected, but keeping model on GPU for performance")
+
+                                                # Final attempt without any generator
+                                                image = image_model(
+                                                    prompt=prompt,
+                                                    negative_prompt=negative_prompt,
+                                                    width=width,
+                                                    height=height,
+                                                    num_inference_steps=steps,
+                                                    guidance_scale=guidance_scale,
+                                                    # No generator at all for final attempt
+                                                    callback_on_step_end=progress_callback
+                                                ).images[0]
+                                            else:
+                                                # Re-raise if it's not a device mismatch error
+                                                raise
+                                    else:
+                                        # For other pipelines, include callback_steps
+                                        logger.info("Retry - Using standard pipeline parameters (with callback_steps)")
+                                        try:
+                                            # Try with a CPU generator first
+                                            cpu_generator = torch.Generator("cpu").manual_seed(seed)
+                                            logger.info("Created CPU generator for standard pipeline retry")
+                                            image = image_model(
+                                                prompt=prompt,
+                                                negative_prompt=negative_prompt,
+                                                width=width,
+                                                height=height,
+                                                num_inference_steps=steps,
+                                                guidance_scale=guidance_scale,
+                                                generator=cpu_generator,
+                                                callback_on_step_end=progress_callback,
+                                                callback_steps=1  # Update on every step
+                                            ).images[0]
+                                        except RuntimeError as e2:
+                                            # If we still get a device mismatch error, try one final approach
+                                            if "tensor on device meta is not on the expected device" in str(e2).lower():
+                                                logger.error(f"Still getting device mismatch in retry: {str(e2)}")
+                                                logger.info("Final retry attempt - using CPU device for all operations")
+
+                                                # Keep model on GPU instead of moving to CPU
+                                                logger.warning("Device mismatch detected, but keeping model on GPU for performance")
+
+                                                # Final attempt without any generator
+                                                image = image_model(
+                                                    prompt=prompt,
+                                                    negative_prompt=negative_prompt,
+                                                    width=width,
+                                                    height=height,
+                                                    num_inference_steps=steps,
+                                                    guidance_scale=guidance_scale,
+                                                    # No generator at all for final attempt
+                                                    callback_on_step_end=progress_callback,
+                                                    callback_steps=1  # Update on every step
+                                                ).images[0]
+                                            else:
+                                                # Re-raise if it's not a device mismatch error
+                                                raise
                                 except StopIteration as e:
                                     # Handle user-initiated stop in the retry
                                     logger.info(f"Generation stopped by user at step {result_container['current_step']}/{steps}")
@@ -178,6 +296,13 @@ class ImageGenerator:
                     image_path = self.output_dir / f"generated_{timestamp}.png"
                     image.save(image_path)
 
+                    # Get performance stats
+                    perf_monitor = get_performance_monitor()
+                    gpu_stats = perf_monitor.get_gpu_stats()
+                    
+                    # Calculate generation time
+                    generation_time = time.time() - start_time
+                    
                     # Store results
                     result_container["image"] = image
                     result_container["info"] = f"""
@@ -187,10 +312,21 @@ class ImageGenerator:
         <li><strong>Model:</strong> {image_model_name}</li>
         <li><strong>Resolution:</strong> {width}x{height}</li>
         <li><strong>Seed:</strong> {seed}</li>
+        <li><strong>Time:</strong> {generation_time:.1f}s ({steps/generation_time:.2f} it/s)</li>
         <li><strong>Saved to:</strong> {image_path.name}</li>
     </ul>
-</div>
 """
+                    
+                    # Add GPU stats if available
+                    if gpu_stats and "pytorch" in gpu_stats:
+                        pytorch_stats = gpu_stats["pytorch"]
+                        result_container["info"] += f"""
+    <ul>
+        <li><strong>VRAM Used:</strong> {pytorch_stats['allocated_gb']:.1f}/{pytorch_stats['total_gb']:.1f}GB</li>
+    </ul>
+"""
+                    
+                    result_container["info"] += "</div>"
             except Exception as e:
                 logger.error(f"Error generating image: {str(e)}")
                 result_container["error"] = str(e)

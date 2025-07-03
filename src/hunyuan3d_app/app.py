@@ -11,14 +11,20 @@ if __name__ == "__main__":
         sys.path.insert(0, parent_dir)
     from hunyuan3d_app.hunyuan3d_studio import Hunyuan3DStudio
     from hunyuan3d_app.ui import create_interface
+    from hunyuan3d_app.gpu_optimizer import get_gpu_optimizer
 else:
     # When imported as a module, use relative imports
     from .hunyuan3d_studio import Hunyuan3DStudio
     from .ui import create_interface
+    from .gpu_optimizer import get_gpu_optimizer
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+# Initialize GPU optimizations early
+logger.info("Initializing GPU optimizations...")
+gpu_optimizer = get_gpu_optimizer()
 
 # Create the app
 app = Hunyuan3DStudio()

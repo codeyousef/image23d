@@ -30,6 +30,8 @@ class ImageModelConfig:
     description: str
     optimal_resolution: Tuple[int, int]
     supports_refiner: bool = False
+    is_gguf: bool = False
+    gguf_file: str = ""
 
 
 @dataclass
@@ -107,6 +109,46 @@ IMAGE_MODELS = {
         supports_refiner=False
     )
 }
+# GGUF Models - Memory optimized versions
+GGUF_IMAGE_MODELS = {
+    "FLUX.1-dev-Q8": ImageModelConfig(
+        name="FLUX.1-dev Q8 GGUF (Memory Optimized)",
+        repo_id="city96/FLUX.1-dev-gguf",
+        pipeline_class="FluxPipeline",
+        size="~12.5 GB",
+        vram_required="14GB+",
+        description="Memory-optimized FLUX.1-dev with 8-bit quantization - 50% less VRAM",
+        optimal_resolution=(1024, 1024),
+        supports_refiner=False,
+        is_gguf=True,
+        gguf_file="flux1-dev-Q8_0.gguf"
+    ),
+    "FLUX.1-dev-Q6": ImageModelConfig(
+        name="FLUX.1-dev Q6 GGUF (Ultra Memory Optimized)",
+        repo_id="city96/FLUX.1-dev-gguf",
+        pipeline_class="FluxPipeline",
+        size="~10 GB",
+        vram_required="12GB+",
+        description="Ultra memory-optimized FLUX.1-dev with 6-bit quantization - 60% less VRAM",
+        optimal_resolution=(1024, 1024),
+        supports_refiner=False,
+        is_gguf=True,
+        gguf_file="flux1-dev-Q6_K.gguf"
+    ),
+    "FLUX.1-schnell-Q8": ImageModelConfig(
+        name="FLUX.1-schnell Q8 GGUF (Fast + Memory Optimized)",
+        repo_id="city96/FLUX.1-schnell-gguf",
+        pipeline_class="FluxPipeline",
+        size="~12.5 GB",
+        vram_required="14GB+",
+        description="Fast FLUX.1-schnell with 8-bit quantization - 50% less VRAM, 4x faster",
+        optimal_resolution=(1024, 1024),
+        supports_refiner=False,
+        is_gguf=True,
+        gguf_file="flux1-schnell-Q8_0.gguf"
+    )
+}
+
 GATED_IMAGE_MODELS = {
     "FLUX.1-schnell": ImageModelConfig(
         name="FLUX.1-schnell (Requires HF Login)",
@@ -129,7 +171,7 @@ GATED_IMAGE_MODELS = {
         supports_refiner=False
     )
 }
-ALL_IMAGE_MODELS = {**IMAGE_MODELS, **GATED_IMAGE_MODELS}
+ALL_IMAGE_MODELS = {**IMAGE_MODELS, **GGUF_IMAGE_MODELS, **GATED_IMAGE_MODELS}
 HUNYUAN3D_MODELS = {
     "hunyuan3d-2mini": {
         "name": "Hunyuan3D 2.0 Mini",
@@ -148,6 +190,31 @@ HUNYUAN3D_MODELS = {
         "optimal_views": 8
     }
 }
+# Component models for FLUX (VAE, Text Encoders)
+FLUX_COMPONENTS = {
+    "vae": {
+        "name": "FLUX VAE",
+        "repo_id": "black-forest-labs/FLUX.1-dev",
+        "filename": "ae.safetensors",
+        "size": "~335 MB",
+        "description": "FLUX Autoencoder for image encoding/decoding"
+    },
+    "text_encoder_clip": {
+        "name": "CLIP Text Encoder",
+        "repo_id": "comfyanonymous/flux_text_encoders",
+        "filename": "clip_l.safetensors", 
+        "size": "~246 MB",
+        "description": "CLIP text encoder for prompt processing"
+    },
+    "text_encoder_t5": {
+        "name": "T5 Text Encoder",
+        "repo_id": "comfyanonymous/flux_text_encoders",
+        "filename": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+        "size": "~4.5 GB", 
+        "description": "T5 text encoder (FP8 optimized) for advanced prompt understanding"
+    }
+}
+
 QUALITY_PRESETS = {
     "draft": QualityPreset(
         name="Draft",

@@ -2,7 +2,7 @@ import gradio as gr
 from pathlib import Path
 
 from .hunyuan3d_studio import Hunyuan3DStudio
-from .config import ALL_IMAGE_MODELS, HUNYUAN3D_MODELS, QUALITY_PRESETS, IMAGE_MODELS, GATED_IMAGE_MODELS
+from .config import ALL_IMAGE_MODELS, HUNYUAN3D_MODELS, QUALITY_PRESETS, IMAGE_MODELS, GATED_IMAGE_MODELS, GGUF_IMAGE_MODELS
 
 def load_custom_css():
     css_path = Path("app_styles.css")
@@ -243,6 +243,7 @@ def create_interface(app: Hunyuan3DStudio):
                                 with gr.Row():
                                     download_img_btn = gr.Button(f"Download {name}", size="sm", variant="primary")
                                     stop_download_btn = gr.Button("Stop", size="sm", variant="stop")
+                                    delete_img_btn = gr.Button("Delete", size="sm", variant="stop")
                                     force_redownload = gr.Checkbox(label="Force re-download", value=False)
 
                                 status_html = gr.HTML()
@@ -252,6 +253,11 @@ def create_interface(app: Hunyuan3DStudio):
                                         yield from app.model_manager.download_model("image", model_name, use_hf_token=False,
                                                                   force_redownload=force, progress=progress)
                                     return download_fn
+                                
+                                def create_delete_fn(model_name):
+                                    def delete_fn():
+                                        return app.delete_model("image", model_name)
+                                    return delete_fn
 
                                 download_img_btn.click(
                                     fn=create_download_fn(name),
@@ -261,6 +267,11 @@ def create_interface(app: Hunyuan3DStudio):
 
                                 stop_download_btn.click(
                                     fn=app.model_manager.stop_download,
+                                    outputs=[status_html]
+                                )
+                                
+                                delete_img_btn.click(
+                                    fn=create_delete_fn(name),
                                     outputs=[status_html]
                                 )
 
@@ -277,6 +288,7 @@ def create_interface(app: Hunyuan3DStudio):
                                 with gr.Row():
                                     download_gated_btn = gr.Button(f"Download {name}", size="sm", variant="secondary")
                                     stop_gated_btn = gr.Button("Stop", size="sm", variant="stop")
+                                    delete_gated_btn = gr.Button("Delete", size="sm", variant="stop")
                                     force_redownload_gated = gr.Checkbox(label="Force re-download", value=False)
 
                                 gated_status = gr.HTML()
@@ -286,6 +298,11 @@ def create_interface(app: Hunyuan3DStudio):
                                         yield from app.model_manager.download_model("image", model_name, use_hf_token=True,
                                                                   force_redownload=force, progress=progress)
                                     return download_fn
+                                
+                                def create_gated_delete_fn(model_name):
+                                    def delete_fn():
+                                        return app.delete_model("image", model_name)
+                                    return delete_fn
 
                                 download_gated_btn.click(
                                     fn=create_gated_download_fn(name),
@@ -296,6 +313,55 @@ def create_interface(app: Hunyuan3DStudio):
                                 stop_gated_btn.click(
                                     fn=app.model_manager.stop_download,
                                     outputs=[gated_status]
+                                )
+                                
+                                delete_gated_btn.click(
+                                    fn=create_gated_delete_fn(name),
+                                    outputs=[gated_status]
+                                )
+
+                        # GGUF Models section
+                        gr.Markdown("### ⚡ GGUF Models (Memory Optimized)")
+                        gr.Markdown("Quantized FLUX models that use 50-60% less VRAM with similar quality.")
+
+                        for name, config in GGUF_IMAGE_MODELS.items():
+                            with gr.Group():
+                                gr.Markdown(f"**{name}**")
+                                gr.Markdown(f"🚀 {config.description}")
+                                gr.Markdown(f"Size: {config.size} | VRAM: {config.vram_required}")
+
+                                with gr.Row():
+                                    download_gguf_btn = gr.Button(f"Download {name}", size="sm", variant="secondary")
+                                    stop_gguf_btn = gr.Button("Stop", size="sm", variant="stop")
+                                    delete_gguf_btn = gr.Button("Delete", size="sm", variant="stop")
+                                    force_redownload_gguf = gr.Checkbox(label="Force re-download", value=False)
+
+                                gguf_status = gr.HTML()
+
+                                def create_gguf_download_fn(model_name):
+                                    def download_fn(force):
+                                        return app.download_gguf_model(model_name, force, None)
+                                    return download_fn
+                                
+                                def create_gguf_delete_fn(model_name):
+                                    def delete_fn():
+                                        return app.delete_gguf_model(model_name)
+                                    return delete_fn
+
+                                download_gguf_btn.click(
+                                    fn=create_gguf_download_fn(name),
+                                    inputs=[force_redownload_gguf],
+                                    outputs=[gguf_status]
+                                )
+
+                                stop_gguf_btn.click(
+                                    fn=app.model_manager.stop_download,
+                                    outputs=[gguf_status]
+                                )
+                                
+                                delete_gguf_btn.click(
+                                    fn=create_gguf_delete_fn(name),
+                                    outputs=[gguf_status]
                                 )
 
                     with gr.Column():
@@ -311,6 +377,7 @@ def create_interface(app: Hunyuan3DStudio):
                                 with gr.Row():
                                     download_3d_btn = gr.Button(f"Download {name}", size="sm", variant="primary")
                                     stop_3d_btn = gr.Button("Stop", size="sm", variant="stop")
+                                    delete_3d_btn = gr.Button("Delete", size="sm", variant="stop")
                                     force_redownload_3d = gr.Checkbox(label="Force re-download", value=False)
 
                                 status_3d = gr.HTML()
@@ -319,6 +386,11 @@ def create_interface(app: Hunyuan3DStudio):
                                     def download_fn(force, progress=gr.Progress()):
                                         yield from app.model_manager.download_model("3d", model_name, force_redownload=force, progress=progress)
                                     return download_fn
+                                
+                                def create_3d_delete_fn(model_name):
+                                    def delete_fn():
+                                        return app.delete_model("3d", model_name)
+                                    return delete_fn
 
                                 download_3d_btn.click(
                                     fn=create_3d_download_fn(name),
@@ -328,6 +400,11 @@ def create_interface(app: Hunyuan3DStudio):
 
                                 stop_3d_btn.click(
                                     fn=app.model_manager.stop_download,
+                                    outputs=[status_3d]
+                                )
+                                
+                                delete_3d_btn.click(
+                                    fn=create_3d_delete_fn(name),
                                     outputs=[status_3d]
                                 )
 
@@ -358,6 +435,41 @@ def create_interface(app: Hunyuan3DStudio):
                         fn=app.get_model_status,
                         outputs=[model_status]
                     )
+
+                # FLUX Components Download
+                with gr.Group():
+                    gr.Markdown("### 🔧 FLUX Components")
+                    gr.Markdown("Download individual FLUX components (VAE, text encoders). These are automatically included with GGUF models.")
+                    
+                    from .config import FLUX_COMPONENTS
+                    for comp_key, comp_config in FLUX_COMPONENTS.items():
+                        with gr.Row():
+                            gr.Markdown(f"**{comp_config['name']}**\n{comp_config['description']}\nSize: {comp_config['size']}")
+                            with gr.Column(scale=1):
+                                with gr.Row():
+                                    download_comp_btn = gr.Button(f"Download {comp_key}", size="sm", variant="secondary")
+                                    delete_comp_btn = gr.Button("Delete", size="sm", variant="stop")
+                                comp_status = gr.HTML()
+                                
+                                def create_comp_download_fn(component_name):
+                                    def download_fn():
+                                        return app.download_component(component_name, None)
+                                    return download_fn
+                                
+                                def create_comp_delete_fn(component_name):
+                                    def delete_fn():
+                                        return app.delete_component(component_name)
+                                    return delete_fn
+                                
+                                download_comp_btn.click(
+                                    fn=create_comp_download_fn(comp_key),
+                                    outputs=[comp_status]
+                                )
+                                
+                                delete_comp_btn.click(
+                                    fn=create_comp_delete_fn(comp_key),
+                                    outputs=[comp_status]
+                                )
 
                 # Missing Components Download
                 with gr.Group():
@@ -593,7 +705,7 @@ def create_interface(app: Hunyuan3DStudio):
                     outputs=[convert_3d_btn, stop_3d_btn]
                 )
 
-            # System Requirements Tab
+            # System Requirements Tab  
             with gr.Tab("🔍 System Requirements"):
                 gr.Markdown("""
                 ### System Requirements Check

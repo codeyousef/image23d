@@ -72,7 +72,7 @@ class Hunyuan3DStudio:
 
 
 
-    def load_image_model(self, model_name: str, progress=gr.Progress()) -> str:
+    def load_image_model(self, model_name, progress):
         # Check if the model name has the "(not downloaded)" suffix and handle it
         if "(not downloaded)" in model_name:
             # Extract the actual model name
@@ -84,7 +84,7 @@ class Hunyuan3DStudio:
         )
         return load_status
 
-    def load_hunyuan3d_model(self, model_name: str, progress=gr.Progress()) -> str:
+    def load_hunyuan3d_model(self, model_name, progress):
         # Check if the model name has the "(not downloaded)" suffix and handle it
         if "(not downloaded)" in model_name:
             # Extract the actual model name
@@ -108,6 +108,126 @@ class Hunyuan3DStudio:
     def check_system_requirements(self) -> str:
         """Check system requirements and return HTML report"""
         return get_system_requirements_html()
+    
+    def download_model(self, model_name, progress):
+        """Download a standard image model"""
+        return self.model_manager.download_model("image", model_name, progress)
+    
+    def download_gguf_model(self, model_name, force_redownload, progress):
+        """Download a GGUF model and components"""
+        from .config import GGUF_IMAGE_MODELS
+        if model_name in GGUF_IMAGE_MODELS:
+            config = GGUF_IMAGE_MODELS[model_name]
+            model_path = self.model_manager.models_dir / "gguf" / model_name
+            
+            # If force redownload, delete existing first
+            if force_redownload and model_path.exists():
+                import shutil
+                shutil.rmtree(model_path)
+                if progress:
+                    progress(0.05, desc="Removed existing model for re-download...")
+            
+            return self.model_manager._load_gguf_model(model_path, config, "cuda", None, progress)[0]
+        return f"❌ Unknown GGUF model: {model_name}"
+    
+    def download_component(self, component_name, progress):
+        """Download a FLUX component (VAE, text encoder)"""
+        from .config import FLUX_COMPONENTS
+        if component_name in FLUX_COMPONENTS:
+            comp = FLUX_COMPONENTS[component_name]
+            try:
+                from huggingface_hub import hf_hub_download
+                
+                # Determine target directory
+                if component_name == "vae":
+                    target_dir = self.model_manager.models_dir / "vae"
+                else:
+                    target_dir = self.model_manager.models_dir / "text_encoders"
+                
+                target_dir.mkdir(parents=True, exist_ok=True)
+                file_path = target_dir / comp["filename"]
+                
+                if file_path.exists():
+                    return f"✅ {comp['name']} already downloaded"
+                
+                if progress:
+                    progress(0.5, desc=f"Downloading {comp['name']}...")
+                hf_hub_download(
+                    repo_id=comp["repo_id"],
+                    filename=comp["filename"],
+                    local_dir=target_dir,
+                    token=self.model_manager.hf_token
+                )
+                
+                return f"✅ Successfully downloaded {comp['name']}"
+                
+            except Exception as e:
+                return f"❌ Failed to download {comp['name']}: {str(e)}"
+        
+        return f"❌ Unknown component: {component_name}"
+    
+    def delete_model(self, model_type, model_name):
+        """Delete a downloaded model"""
+        import shutil
+        
+        try:
+            if model_type == "image":
+                model_path = self.model_manager.models_dir / "image" / model_name
+            elif model_type == "3d":
+                model_path = self.model_manager.models_dir / "3d" / model_name
+            else:
+                return f"❌ Unknown model type: {model_type}"
+            
+            if model_path.exists():
+                shutil.rmtree(model_path)
+                return f"✅ Successfully deleted {model_name}"
+            else:
+                return f"❌ Model {model_name} not found"
+                
+        except Exception as e:
+            return f"❌ Failed to delete {model_name}: {str(e)}"
+    
+    def delete_gguf_model(self, model_name):
+        """Delete a GGUF model and optionally its components"""
+        import shutil
+        
+        try:
+            # Delete GGUF model directory
+            gguf_path = self.model_manager.models_dir / "gguf" / model_name
+            if gguf_path.exists():
+                shutil.rmtree(gguf_path)
+                
+            # Note: We don't auto-delete components since they might be used by other models
+            return f"✅ Successfully deleted GGUF model {model_name}. Components (VAE, text encoders) preserved for other models."
+                
+        except Exception as e:
+            return f"❌ Failed to delete GGUF model {model_name}: {str(e)}"
+    
+    def delete_component(self, component_name):
+        """Delete a FLUX component"""
+        import os
+        from .config import FLUX_COMPONENTS
+        
+        if component_name not in FLUX_COMPONENTS:
+            return f"❌ Unknown component: {component_name}"
+            
+        try:
+            comp = FLUX_COMPONENTS[component_name]
+            
+            # Determine file path
+            if component_name == "vae":
+                file_path = self.model_manager.models_dir / "vae" / comp["filename"]
+            else:
+                file_path = self.model_manager.models_dir / "text_encoders" / comp["filename"]
+            
+            if file_path.exists():
+                os.remove(file_path)
+                return f"✅ Successfully deleted {comp['name']}"
+            else:
+                return f"❌ Component {comp['name']} not found"
+                
+        except Exception as e:
+            return f"❌ Failed to delete component: {str(e)}"
 
     def get_model_selection_data(self):
         """Returns updated choices and disabled status for model dropdowns."""
@@ -191,16 +311,16 @@ class Hunyuan3DStudio:
 
     def generate_image(
             self,
-            prompt: str,
-            negative_prompt: str,
-            model_name: str,
-            width: int,
-            height: int,
-            steps: int,
-            guidance_scale: float,
-            seed: int,
-            progress=gr.Progress()
-    ) -> Tuple[Image.Image, str]:
+            prompt,
+            negative_prompt,
+            model_name,
+            width,
+            height,
+            steps,
+            guidance_scale,
+            seed,
+            progress
+    ):
         # Check if the model name has the "(not downloaded)" suffix and handle it
         if "(not downloaded)" in model_name:
             # Extract the actual model name
@@ -263,14 +383,14 @@ class Hunyuan3DStudio:
 
     def convert_to_3d(
             self,
-            image: Image.Image,
-            model_name: str,
-            remove_bg: bool,
-            num_views: int,
-            mesh_resolution: int,
-            texture_resolution: int,
-            progress=gr.Progress()
-    ) -> Tuple[Optional[str], Optional[Image.Image], str]:
+            image,
+            model_name,
+            remove_bg,
+            num_views,
+            mesh_resolution,
+            texture_resolution,
+            progress
+    ):
         # Load model if needed
         if not self.hunyuan3d_model or self.hunyuan3d_model_name != model_name:
             load_status = self.load_hunyuan3d_model(model_name, progress)
@@ -295,19 +415,19 @@ class Hunyuan3DStudio:
 
     def full_pipeline(
             self,
-            prompt: str,
-            negative_prompt: str,
-            image_model: str,
-            width: int,
-            height: int,
-            seed: int,
-            quality_preset: str,
-            hunyuan_model: str,
-            keep_image_loaded: bool,
-            save_intermediate: bool,
-            only_generate_image: bool = False,
-            progress=gr.Progress()
-    ) -> Tuple[Optional[Image.Image], Optional[Image.Image], Optional[str], str]:
+            prompt,
+            negative_prompt,
+            image_model,
+            width,
+            height,
+            seed,
+            quality_preset,
+            hunyuan_model,
+            keep_image_loaded,
+            save_intermediate,
+            only_generate_image,
+            progress
+    ):
         """Run the complete text-to-3D pipeline or just generate an image if only_generate_image is True"""
         try:
             # Check for missing components in the image model
