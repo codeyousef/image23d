@@ -24,7 +24,7 @@ def save_hf_token(token: str):
     HF_TOKEN_FILE.write_bytes(encoded_token)
 
 
-def load_hf_token() -> Optional[str]:
+def load_hf_token():
     """Load and decode the Hugging Face token."""
     if not HF_TOKEN_FILE.exists():
         return None
