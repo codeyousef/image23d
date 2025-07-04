@@ -21,15 +21,18 @@ from diffusers import (
     StableDiffusionXLPipeline,
     DiffusionPipeline,
     AutoPipelineForText2Image,
-    FluxPipeline
+    FluxPipeline,
+    FluxTransformer2DModel,
+    GGUFQuantizationConfig
 )
 from huggingface_hub import snapshot_download, HfApi
 
 from .config import (
-    IMAGE_MODELS, GATED_IMAGE_MODELS,
+    IMAGE_MODELS, GATED_IMAGE_MODELS, GGUF_IMAGE_MODELS,
     ALL_IMAGE_MODELS, HUNYUAN3D_MODELS
 )
 from .memory_manager import get_memory_manager
+from .gguf_manager import GGUFModelManager, GGUFModelInfo
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +68,7 @@ class ModelManager:
         self.image_model_name = None
         self.hunyuan3d_model = None
         self.hunyuan3d_model_name = None
+        self.gguf_manager = GGUFModelManager(cache_dir=str(models_dir / "gguf"))
 
         self.download_in_progress = False
         self.current_download_model = None
@@ -155,10 +159,39 @@ class ModelManager:
 
     def check_model_complete(self, model_path, model_type, model_name):
         """Check if a model is completely downloaded"""
+        # Check if this is a GGUF model
+        from .config import GGUF_IMAGE_MODELS
+        if model_name in GGUF_IMAGE_MODELS:
+            return self.check_gguf_model_complete(model_name)
+        
         model_path = model_path.resolve()
         if not model_path.exists():
             return False
 
+        # Check if this is a HuggingFace cache directory structure
+        # HF creates: cache_dir/models--{org}--{model}/snapshots/{hash}/
+        subdirs = [d for d in model_path.iterdir() if d.is_dir()]
+        hf_cache_dirs = [d for d in subdirs if d.name.startswith("models--")]
+        
+        if hf_cache_dirs:
+            # This is a HF cache structure, need to look inside for the actual model
+            for hf_cache_dir in hf_cache_dirs:
+                snapshots_dir = hf_cache_dir / "snapshots"
+                if snapshots_dir.exists():
+                    # Get the latest snapshot (usually there's only one)
+                    snapshot_dirs = [d for d in snapshots_dir.iterdir() if d.is_dir()]
+                    if snapshot_dirs:
+                        # Check the first (and usually only) snapshot
+                        actual_model_path = snapshot_dirs[0]
+                        # Recursively check this path
+                        return self._check_model_files(actual_model_path, model_type, model_name)
+            return False
+        else:
+            # Standard directory structure
+            return self._check_model_files(model_path, model_type, model_name)
+
+    def _check_model_files(self, model_path, model_type, model_name):
+        """Check if model files are complete in the given path"""
         # Check for essential files based on model type
         if model_type == "image":
             # Special case for FLUX models which have a different structure
@@ -294,13 +327,46 @@ class ModelManager:
         Returns:
             List of missing component names, empty list if all components are present
         """
+        from .config import GGUF_IMAGE_MODELS, FLUX_COMPONENTS
+        
         missing_components = []
+
+        # Check if this is a GGUF model
+        if model_name in GGUF_IMAGE_MODELS:
+            # GGUF models have a different structure
+            config = GGUF_IMAGE_MODELS[model_name]
+            
+            # Use the helper method that checks multiple locations
+            gguf_file = self._find_gguf_file(model_name, config.gguf_file)
+            
+            if not gguf_file:
+                return ["complete model"]
+            
+            # For FLUX GGUF models, check required components
+            if "FLUX" in model_name:
+                # Check VAE
+                vae_path = self.models_dir / "vae" / FLUX_COMPONENTS["vae"]["filename"]
+                if not vae_path.exists():
+                    missing_components.append("VAE")
+                
+                # Check text encoders
+                te_dir = self.models_dir / "text_encoders"
+                clip_path = te_dir / FLUX_COMPONENTS["text_encoder_clip"]["filename"]
+                t5_path = te_dir / FLUX_COMPONENTS["text_encoder_t5"]["filename"]
+                
+                if not clip_path.exists():
+                    missing_components.append("CLIP Text Encoder")
+                if not t5_path.exists():
+                    missing_components.append("T5 Text Encoder")
+            
+            return missing_components
 
         # First check if the model is downloaded at all
         model_path_cache = self.models_dir / model_type / model_name
         model_path_src = self.src_models_dir / model_type / model_name if model_name.startswith("FLUX") else None
 
         # Determine which path to use
+        model_path = None
         if model_path_cache.exists():
             model_path = model_path_cache
         elif model_path_src and model_path_src.exists():
@@ -308,6 +374,22 @@ class ModelManager:
         else:
             # Model not downloaded at all
             return ["complete model"]
+        
+        # Check if this is a HuggingFace cache directory structure
+        subdirs = [d for d in model_path.iterdir() if d.is_dir()]
+        hf_cache_dirs = [d for d in subdirs if d.name.startswith("models--")]
+        
+        if hf_cache_dirs:
+            # This is a HF cache structure, need to look inside for the actual model
+            for hf_cache_dir in hf_cache_dirs:
+                snapshots_dir = hf_cache_dir / "snapshots"
+                if snapshots_dir.exists():
+                    # Get the latest snapshot (usually there's only one)
+                    snapshot_dirs = [d for d in snapshots_dir.iterdir() if d.is_dir()]
+                    if snapshot_dirs:
+                        # Check the first (and usually only) snapshot
+                        model_path = snapshot_dirs[0]
+                        break
 
         # For image models, check for specific components
         if model_type == "image":
@@ -354,6 +436,81 @@ class ModelManager:
 
         return missing_components
 
+    def _find_gguf_file(self, model_name, gguf_filename):
+        """Find GGUF file in either direct path or HF cache structure"""
+        # Try multiple possible directory names
+        possible_dirs = [
+            self.models_dir / "gguf" / model_name,  # e.g. "FLUX.1-dev-Q8"
+            self.models_dir / "gguf" / f"{model_name} GGUF (Memory Optimized)",  # With full name
+        ]
+        
+        # Also check if config has a different name
+        from .config import GGUF_IMAGE_MODELS
+        if model_name in GGUF_IMAGE_MODELS:
+            config = GGUF_IMAGE_MODELS[model_name]
+            possible_dirs.append(self.models_dir / "gguf" / config.name)
+        
+        for gguf_dir in possible_dirs:
+            if not gguf_dir.exists():
+                continue
+                
+            # First check direct path
+            direct_path = gguf_dir / gguf_filename
+            if direct_path.exists():
+                logger.info(f"Found GGUF file at direct path: {direct_path}")
+                return direct_path
+                
+            # Check HuggingFace cache structure
+            # Look for models--org--repo directories
+            for item in gguf_dir.iterdir():
+                if item.is_dir() and item.name.startswith("models--"):
+                    # Check snapshots directory
+                    snapshots_dir = item / "snapshots"
+                    if snapshots_dir.exists():
+                        # Check each snapshot
+                        for snapshot in snapshots_dir.iterdir():
+                            if snapshot.is_dir():
+                                file_path = snapshot / gguf_filename
+                                if file_path.exists():
+                                    logger.info(f"Found GGUF file in HF cache: {file_path}")
+                                    return file_path
+        
+        logger.warning(f"Could not find GGUF file {gguf_filename} for model {model_name}")
+        logger.warning(f"Searched in: {[str(d) for d in possible_dirs]}")
+        return None
+    
+    def check_gguf_model_complete(self, model_name):
+        """Check if a GGUF model and its components are fully downloaded"""
+        from .config import GGUF_IMAGE_MODELS, FLUX_COMPONENTS
+        
+        if model_name not in GGUF_IMAGE_MODELS:
+            return False
+            
+        config = GGUF_IMAGE_MODELS[model_name]
+        
+        # Check main GGUF file using helper method
+        gguf_file = self._find_gguf_file(model_name, config.gguf_file)
+        logger.info(f"Checking GGUF model {model_name}: found file at {gguf_file}")
+        if not gguf_file:
+            return False
+            
+        # For FLUX models, also check required components
+        if "FLUX" in model_name:
+            # Check VAE
+            vae_path = self.models_dir / "vae" / FLUX_COMPONENTS["vae"]["filename"]
+            if not vae_path.exists():
+                return False
+                
+            # Check text encoders
+            te_dir = self.models_dir / "text_encoders"
+            clip_path = te_dir / FLUX_COMPONENTS["text_encoder_clip"]["filename"]
+            t5_path = te_dir / FLUX_COMPONENTS["text_encoder_t5"]["filename"]
+            
+            if not clip_path.exists() or not t5_path.exists():
+                return False
+        
+        return True
+
     def download_missing_components(self, model_type, model_name, progress):
         """Download missing components for a model
 
@@ -395,6 +552,58 @@ class ModelManager:
                 elif model_name in GATED_IMAGE_MODELS:
                     config = GATED_IMAGE_MODELS[model_name]
                     is_gated = True
+                elif model_name in GGUF_IMAGE_MODELS:
+                    # For GGUF models, we only need to download FLUX components
+                    from .config import FLUX_COMPONENTS
+                    
+                    # Check which components are missing
+                    missing = self.check_missing_components(model_type, model_name)
+                    
+                    if not missing or "complete model" in missing:
+                        yield f"❌ No missing components to download for {model_name}", *self.get_model_selection_data()
+                        self.download_in_progress = False
+                        self.current_download_model = None
+                        return
+                    
+                    # Download only the missing FLUX components
+                    total_components = len(missing)
+                    for idx, component_name in enumerate(missing):
+                        if self.stop_download_flag:
+                            yield f"⚠️ Download stopped by user", *self.get_model_selection_data()
+                            break
+                        
+                        component_key = None
+                        if "VAE" in component_name:
+                            component_key = "vae"
+                        elif "CLIP" in component_name:
+                            component_key = "text_encoder_clip"
+                        elif "T5" in component_name:
+                            component_key = "text_encoder_t5"
+                        
+                        if component_key and component_key in FLUX_COMPONENTS:
+                            comp_config = FLUX_COMPONENTS[component_key]
+                            yield f"📥 Downloading {component_name} ({idx+1}/{total_components})...", *self.get_model_selection_data()
+                            
+                            # Download the component
+                            target_dir = self.models_dir / comp_config["target_dir"]
+                            target_dir.mkdir(parents=True, exist_ok=True)
+                            
+                            try:
+                                hf_hub_download(
+                                    repo_id=comp_config["repo_id"],
+                                    filename=comp_config["filename"],
+                                    local_dir=target_dir,
+                                    token=self.hf_token if is_gated else None
+                                )
+                                yield f"✅ Downloaded {component_name} ({idx+1}/{total_components})", *self.get_model_selection_data()
+                            except Exception as e:
+                                yield f"❌ Failed to download {component_name}: {str(e)}", *self.get_model_selection_data()
+                                break
+                    
+                    yield f"✅ All missing components downloaded for {model_name}", *self.get_model_selection_data()
+                    self.download_in_progress = False
+                    self.current_download_model = None
+                    return
                 else:
                     yield f"❌ Unknown model: {model_name}", *self.get_model_selection_data()
                     self.download_in_progress = False
@@ -848,7 +1057,7 @@ class ModelManager:
             # Configure download parameters with minimal settings to avoid compatibility issues
             download_kwargs = {
                 "repo_id": repo_id,
-                "local_dir": str(save_path),
+                "cache_dir": str(save_path),  # Use cache_dir to download directly to our models directory
                 "force_download": force_redownload,  # Force fresh download if requested
                 "max_workers": 8, # Increase concurrent connections for faster downloads
             }
@@ -1596,6 +1805,703 @@ class ModelManager:
 
         return True  # Memory is fine
 
+    def download_gguf_model(self, model_name, force_redownload, progress):
+        """Download GGUF model with streaming progress updates - generator version"""
+        from .config import GGUF_IMAGE_MODELS
+        
+        if model_name not in GGUF_IMAGE_MODELS:
+            yield f"❌ Unknown GGUF model: {model_name}", *self.get_model_selection_data()
+            return
+            
+        config = GGUF_IMAGE_MODELS[model_name]
+        model_path = self.models_dir / "gguf" / model_name
+        
+        try:
+            # Check if download is already in progress
+            if self.download_in_progress:
+                yield f"""
+<div class="error-box">
+    <h4>⚠️ Download Already in Progress</h4>
+    <p><strong>Model:</strong> {self.current_download_model}</p>
+    <p>Please wait for it to complete or stop it before starting a new download.</p>
+</div>
+""", *self.get_model_selection_data()
+                return
+            
+            # Set download flags
+            self.download_in_progress = True
+            self.current_download_model = f"{model_name} (GGUF)"
+            self.stop_download_flag = False
+            
+            # Progress tracking
+            if progress:
+                progress(0.01, desc=f"Starting download of {model_name}...")
+            
+            yield f"""
+<div class="info-box">
+    <h4>📥 Downloading GGUF Model</h4>
+    <p><strong>Model:</strong> {config.name}</p>
+    <p><strong>Size:</strong> {config.size}</p>
+    <p><strong>Description:</strong> {config.description}</p>
+</div>
+"""
+            
+            # Instead of calling _load_gguf_model, we'll inline the download logic here
+            # to provide better progress updates
+            from .config import FLUX_COMPONENTS
+            from huggingface_hub import hf_hub_download
+            
+            # Create a simple progress info class for GGUF downloads
+            class GGUFProgressInfo:
+                def __init__(self):
+                    self.current_task = ""
+                    self.lock = threading.Lock()
+                
+                def set_current_task(self, task):
+                    with self.lock:
+                        self.current_task = task
+            
+            # Create directories for GGUF components
+            gguf_dir = self.models_dir / "gguf" / model_name
+            gguf_dir.mkdir(parents=True, exist_ok=True)
+            
+            components_to_download = []
+            total_size = 0
+            
+            # Check what needs to be downloaded
+            gguf_file_path = gguf_dir / config.gguf_file
+            logger.info(f"Checking GGUF file: {gguf_file_path}")
+            logger.info(f"GGUF file exists: {gguf_file_path.exists()}")
+            
+            if force_redownload or not gguf_file_path.exists():
+                components_to_download.append(("GGUF Model", config.gguf_file, gguf_dir, config.repo_id))
+                logger.info(f"Will download GGUF model: {config.gguf_file}")
+            
+            # For FLUX models, inform user about base component requirements
+            if "FLUX" in model_name:
+                yield f"""
+<div class="info-box">
+    <h4>ℹ️ Note about FLUX Components</h4>
+    <p>GGUF models require FLUX base components (VAE, text encoders) for generation.</p>
+    <p>These will be downloaded automatically when you first generate an image.</p>
+    <p style="font-size: 0.9em; color: #666;">This approach avoids large upfront downloads and only gets what's needed.</p>
+</div>
+"""
+            
+            # Skip the base model pre-download to avoid hanging issues
+            if False:  # Disabled due to download hanging issues
+                    yield f"""
+<div class="info-box">
+    <h4>📥 Downloading FLUX Base Model</h4>
+    <p>This includes VAE, text encoders, and other components needed for generation.</p>
+    <p>This is a one-time download (~5GB total).</p>
+</div>
+"""
+                    try:
+                        # Use snapshot_download to get the full model
+                        from huggingface_hub import snapshot_download
+                        import os
+                        
+                        # Set environment variables for faster downloads
+                        os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+                        os.environ["HF_TRANSFER_CONCURRENCY"] = "8"  # Parallel connections
+                        
+                        # Progress tracking for snapshot download
+                        progress_info = GGUFProgressInfo()
+                        total_files = 25  # Approximate for FLUX
+                        
+                        # Create a progress callback
+                        def download_callback(progress_data):
+                            if isinstance(progress_data, dict) and "downloaded" in progress_data:
+                                downloaded = progress_data.get("downloaded", 0)
+                                total = progress_data.get("total", 1)
+                                percent = (downloaded / total) * 100 if total > 0 else 0
+                                progress_info.set_current_task(f"Downloading: {percent:.1f}%")
+                        
+                        # Track progress in a thread-safe way
+                        progress_data = {"current": 0, "total": 25, "percent": 0, "current_file": "", "file_percent": 0}
+                        progress_lock = threading.Lock()
+                        
+                        # Capture output to show progress
+                        old_stdout = sys.stdout
+                        old_stderr = sys.stderr
+                        
+                        class DownloadProgressCapture:
+                            def __init__(self, progress_callback, progress_data, progress_lock):
+                                self.progress_callback = progress_callback
+                                self.progress_data = progress_data
+                                self.progress_lock = progress_lock
+                                self.last_update = time.time()
+                                self.buffer = ""
+                                
+                            def write(self, text):
+                                self.buffer += text
+                                current_time = time.time()
+                                
+                                # Process buffer when we have complete lines or every 0.2 seconds
+                                if '\n' in self.buffer or '\r' in self.buffer or current_time - self.last_update > 0.2:
+                                    lines = self.buffer.split('\n')
+                                    self.buffer = lines[-1]  # Keep incomplete line
+                                    
+                                    for line in lines[:-1]:
+                                        if "Fetching" in line and "files:" in line:
+                                            # Parse: "Fetching 25 files: 4%|▍ | 1/25"
+                                            import re
+                                            match = re.search(r'Fetching (\d+) files:\s*(\d+)%.*?(\d+)/(\d+)', line)
+                                            if match:
+                                                with self.progress_lock:
+                                                    self.progress_data["total"] = int(match.group(1))
+                                                    self.progress_data["percent"] = int(match.group(2))
+                                                    self.progress_data["current"] = int(match.group(3))
+                                                
+                                                percent = self.progress_data["percent"]
+                                                current = self.progress_data["current"]
+                                                total = self.progress_data["total"]
+                                                
+                                                desc = f"Downloading FLUX base model: {current}/{total} files ({percent}%)"
+                                                # Only update progress if callback is available
+                                                if hasattr(self.progress_callback, '__call__'):
+                                                    self.progress_callback(0.1 + (percent / 100.0) * 0.8, desc=desc)
+                                                self.last_update = current_time
+                                        elif "Downloading" in line or "download" in line.lower():
+                                            # Also capture individual file downloads
+                                            # Example: "Downloading pytorch_model.safetensors: 100%|████████| 12.5G/12.5G [05:23<00:00, 38.7MB/s]"
+                                            file_match = re.search(r'Downloading ([^:]+):\s*(\d+)%', line)
+                                            if file_match:
+                                                filename = file_match.group(1).strip()
+                                                file_percent = int(file_match.group(2))
+                                                
+                                                # Update progress data with file-specific info
+                                                with self.progress_lock:
+                                                    self.progress_data["current_file"] = filename
+                                                    self.progress_data["file_percent"] = file_percent
+                                                    
+                                                # Log for debugging
+                                                if file_percent % 20 == 0:  # Log every 20%
+                                                    logger.info(f"Downloading {filename}: {file_percent}%")
+                            
+                            def flush(self):
+                                pass
+                        
+                        try:
+                            capture = DownloadProgressCapture(progress, progress_data, progress_lock)
+                            sys.stdout = capture
+                            sys.stderr = capture
+                            
+                            # Try to use hf_transfer for faster downloads
+                            try:
+                                import hf_transfer
+                                logger.info("Using hf_transfer for faster downloads")
+                            except ImportError:
+                                logger.warning("hf_transfer not installed. Install with: pip install hf_transfer")
+                                logger.warning("Downloads may be slower without hf_transfer")
+                                yield f"""
+<div class="warning-box">
+    <h4>💡 Tip: Speed up downloads</h4>
+    <p>Install hf_transfer for faster downloads: <code>pip install hf_transfer</code></p>
+</div>
+"""
+                            
+                            # Start download with progress monitoring
+                            download_exception = None
+                            download_result = None
+                            
+                            def download_with_exception_handling():
+                                nonlocal download_exception, download_result
+                                try:
+                                    logger.info(f"Starting download of {base_model_id} to {flux_cache_dir}")
+                                    download_result = snapshot_download(
+                                        repo_id=base_model_id,
+                                        local_dir=str(flux_cache_dir),
+                                        token=self.hf_token,
+                                        ignore_patterns=["*.md", "*.txt", ".gitattributes"],
+                                        resume_download=True,
+                                        max_workers=4,  # Balance speed and stability
+                                        local_files_only=False,
+                                        force_download=False
+                                    )
+                                    logger.info(f"Download completed: {download_result}")
+                                except Exception as e:
+                                    logger.error(f"Download error: {str(e)}")
+                                    download_exception = e
+                            
+                            download_thread = threading.Thread(target=download_with_exception_handling)
+                            download_thread.daemon = True
+                            download_thread.start()
+                            
+                            # Monitor progress and update UI
+                            last_percent = -1
+                            last_update_time = time.time()
+                            start_time = time.time()
+                            stuck_counter = 0
+                            last_activity_time = time.time()
+                            
+                            while download_thread.is_alive():
+                                # Check for exceptions
+                                if download_exception:
+                                    logger.error(f"Download failed with exception: {download_exception}")
+                                    break
+                                
+                                with progress_lock:
+                                    current = progress_data["current"]
+                                    total = progress_data["total"]
+                                    percent = progress_data["percent"]
+                                
+                                current_time = time.time()
+                                elapsed = current_time - start_time
+                                
+                                # Track if progress is stuck
+                                if percent != last_percent:
+                                    last_activity_time = current_time
+                                    stuck_counter = 0
+                                else:
+                                    stuck_counter += 1
+                                
+                                # If stuck for too long, provide different messaging
+                                time_since_activity = current_time - last_activity_time
+                                is_stuck = time_since_activity > 60  # Consider stuck after 60 seconds of no progress
+                                
+                                # Update more frequently - every percent change or every 1 second
+                                if (percent != last_percent and total > 0) or (current_time - last_update_time > 1.0) or (elapsed < 5):
+                                    # Also update the progress bar if available
+                                    if progress:
+                                        if total > 0 and percent > 0:
+                                            progress_value = 0.1 + (percent / 100.0) * 0.8
+                                            progress(progress_value, desc=f"Downloading FLUX base model: {current}/{total} files ({percent}%)")
+                                        else:
+                                            # Initial phase
+                                            progress_value = min(0.1 + (elapsed / 60.0) * 0.1, 0.2)  # Slowly increase up to 20%
+                                            if is_stuck:
+                                                progress(progress_value, desc="Download appears slow - checking connection...")
+                                            else:
+                                                progress(progress_value, desc="Initializing FLUX base model download...")
+                                    
+                                    # Format elapsed time
+                                    elapsed_str = f"{int(elapsed)}s"
+                                    if elapsed > 60:
+                                        minutes = int(elapsed / 60)
+                                        seconds = int(elapsed % 60)
+                                        elapsed_str = f"{minutes}m {seconds}s"
+                                    
+                                    # Get current file info if available
+                                    current_file = progress_data.get("current_file", "")
+                                    file_percent = progress_data.get("file_percent", 0)
+                                    
+                                    # Build status message
+                                    if percent > 0:
+                                        status_msg = f"<p><strong>Progress:</strong> {current}/{total} files ({percent}%)</p>"
+                                    else:
+                                        if is_stuck and elapsed > 300:  # 5 minutes
+                                            status_msg = """<p style="color: #d32f2f;"><strong>⚠️ Download appears to be stuck</strong></p>
+                                            <p style="font-size: 0.9em;">Possible issues:</p>
+                                            <ul style="font-size: 0.9em;">
+                                                <li>Network connectivity problems</li>
+                                                <li>HuggingFace servers may be slow</li>
+                                                <li>The model may require authentication</li>
+                                            </ul>
+                                            <p style="font-size: 0.9em;">You can cancel and try again later.</p>"""
+                                        elif elapsed > 120:  # 2 minutes
+                                            status_msg = "<p><strong>Status:</strong> Still preparing download... This is taking longer than usual.</p>"
+                                        elif elapsed > 30:
+                                            status_msg = "<p><strong>Status:</strong> Establishing connection to HuggingFace servers...</p>"
+                                        else:
+                                            status_msg = "<p><strong>Status:</strong> Connecting to HuggingFace servers...</p>"
+                                    
+                                    # Add current file info if available
+                                    file_info = ""
+                                    if current_file and file_percent > 0:
+                                        file_info = f'<p style="font-size: 0.9em; color: #666;"><strong>Current file:</strong> {current_file} ({file_percent}%)</p>'
+                                    
+                                    # Skip FLUX download tip since the issue says hf_transfer is already installed
+                                    hf_tip = ""
+                                    if elapsed > 180 and percent == 0:  # 3 minutes with no progress
+                                        hf_tip = """<div style="margin-top: 10px; padding: 10px; background-color: #fff3cd; border-radius: 5px;">
+                                        <p style="color: #856404; margin: 0;"><strong>💡 Troubleshooting Tips:</strong></p>
+                                        <ul style="color: #856404; margin: 5px 0 0 20px; font-size: 0.9em;">
+                                            <li>Try canceling and downloading just the GGUF model first</li>
+                                            <li>Check your internet connection</li>
+                                            <li>FLUX base model is large (~5GB) and may take time</li>
+                                            <li>Consider downloading during off-peak hours</li>
+                                        </ul>
+                                        </div>"""
+                                    
+                                    yield f"""
+<div class="info-box">
+    <h4>📥 Downloading FLUX Base Model</h4>
+    {status_msg}
+    <p><strong>Elapsed:</strong> {elapsed_str}</p>
+    {file_info}
+    <p>Download speed depends on your connection to HuggingFace servers.</p>
+    <p>Size: ~5GB total</p>
+    <div style="margin-top: 10px; background-color: #e0e0e0; border-radius: 5px; padding: 2px;">
+        <div style="width: {percent if percent > 0 else 1}%; height: 20px; background: linear-gradient(to right, #64b5f6, #2196f3); border-radius: 4px; text-align: center; color: white; line-height: 20px; font-weight: bold;">
+            {f"{percent}%" if percent > 0 else "..."}
+        </div>
+    </div>
+    {hf_tip}
+</div>
+"""
+                                    last_percent = percent
+                                    last_update_time = current_time
+                                
+                                # Add timeout after 10 minutes of being stuck
+                                if is_stuck and time_since_activity > 600:
+                                    logger.error("Download timeout - no progress for 10 minutes")
+                                    download_exception = TimeoutError("Download stuck for over 10 minutes")
+                                    break
+                                
+                                time.sleep(0.2)  # Check more frequently
+                            
+                            download_thread.join()
+                            
+                        finally:
+                            sys.stdout = old_stdout
+                            sys.stderr = old_stderr
+                        
+                        yield f"""
+<div class="success-box">
+    <h4>✅ FLUX Base Components Downloaded</h4>
+    <p>All required components are now available locally.</p>
+</div>
+"""
+                    except Exception as e:
+                        logger.error(f"Failed to download FLUX base components: {str(e)}")
+                        yield f"""
+<div class="warning-box">
+    <h4>⚠️ FLUX Base Download Incomplete</h4>
+    <p>Some components may download during generation.</p>
+    <p>Error: {str(e)}</p>
+</div>
+"""
+            
+            logger.info(f"Components to download: {len(components_to_download)}")
+            for comp in components_to_download:
+                logger.info(f"  - {comp[0]}: {comp[1]}")
+            
+            if not components_to_download:
+                yield f"""
+<div class="success-box">
+    <h4>✅ Model Already Downloaded</h4>
+    <p>All components for {config.name} are already present.</p>
+</div>
+""", *self.get_model_selection_data()
+                return
+            
+            # Set up progress tracking
+            progress_info = GGUFProgressInfo()
+            download_complete = False
+            download_error = None
+            current_component_idx = 0
+            
+            # Download thread for GGUF components
+            def gguf_download_thread():
+                nonlocal download_complete, download_error, current_component_idx
+                
+                # Capture stdout/stderr to monitor hf_hub_download progress
+                import sys
+                import re
+                
+                class ProgressCapture:
+                    def __init__(self, progress_info, comp_name):
+                        self.progress_info = progress_info
+                        self.comp_name = comp_name
+                        self.old_stdout = sys.stdout
+                        self.old_stderr = sys.stderr
+                        self.buffer = ""
+                        
+                    def write(self, text):
+                        self.old_stdout.write(text)  # Still output to console
+                        self.buffer += text
+                        
+                        # Process buffer for progress updates
+                        if '\r' in self.buffer or '\n' in self.buffer:
+                            lines = re.split(r'[\r\n]+', self.buffer)
+                            self.buffer = lines[-1]
+                            
+                            for line in lines[:-1]:
+                                # Parse download progress
+                                # Example: "Downloading flux1-dev-Q8_0.gguf: 100%|████████| 12.5G/12.5G [05:23<00:00, 38.7MB/s]"
+                                match = re.search(r'(\d+)%\|.*?\|\s*([\d.]+[GMKB])/([\d.]+[GMKB])\s*\[([^<]+)<([^,]+),\s*([^\]]+)\]', line)
+                                if match:
+                                    percent = match.group(1)
+                                    downloaded = match.group(2)
+                                    total = match.group(3)
+                                    elapsed = match.group(4)
+                                    remaining = match.group(5)
+                                    speed = match.group(6)
+                                    
+                                    self.progress_info.set_current_task(
+                                        f"{self.comp_name}: {percent}% - {downloaded}/{total} @ {speed} (ETA: {remaining})"
+                                    )
+                    
+                    def flush(self):
+                        self.old_stdout.flush()
+                
+                try:
+                    # Download each component
+                    for idx, (comp_name, filename, local_dir, repo_id) in enumerate(components_to_download):
+                        current_component_idx = idx
+                        
+                        if self.stop_download_flag:
+                            download_error = "Download stopped by user"
+                            return
+                        
+                        # Update progress info
+                        progress_info.set_current_task(f"Preparing to download {comp_name}")
+                        
+                        logger.info(f"Starting download: {comp_name} from {repo_id}/{filename}")
+                        logger.info(f"Using token: {'Yes' if self.hf_token else 'No'}")
+                        logger.info(f"Target directory: {local_dir}")
+                        
+                        try:
+                            # Enable hf_transfer for faster downloads
+                            import os
+                            os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+                            
+                            # Try to use hf_transfer for faster downloads
+                            try:
+                                import hf_transfer
+                                logger.info("Using hf_transfer for faster GGUF download")
+                                progress_info.set_current_task(f"🚀 Using hf_transfer for accelerated download of {comp_name}")
+                            except ImportError:
+                                logger.warning("hf_transfer not available - downloads may be slower")
+                                progress_info.set_current_task(f"⚠️ Downloading {comp_name} (install hf_transfer for faster speeds)")
+                            
+                            # Use hf_hub_download which automatically uses hf_transfer if available
+                            from huggingface_hub import hf_hub_download
+                            
+                            # Create a progress callback for hf_hub_download
+                            last_progress = 0
+                            start_time = time.time()
+                            
+                            def download_progress_callback(progress_data):
+                                nonlocal last_progress
+                                if isinstance(progress_data, dict):
+                                    downloaded = progress_data.get("downloaded", 0)
+                                    total = progress_data.get("total", 1)
+                                    if total > 0:
+                                        progress_pct = int((downloaded / total) * 100)
+                                        if progress_pct != last_progress:
+                                            elapsed = time.time() - start_time
+                                            speed = downloaded / elapsed if elapsed > 0 else 0
+                                            speed_str = self._format_bytes(speed) + "/s"
+                                            
+                                            progress_info.set_current_task(
+                                                f"Downloading {comp_name}: {progress_pct}% - {self._format_bytes(downloaded)}/{self._format_bytes(total)} @ {speed_str}"
+                                            )
+                                            last_progress = progress_pct
+                                            
+                                            # Log every 10%
+                                            if progress_pct % 10 == 0:
+                                                logger.info(f"GGUF download progress: {progress_pct}% @ {speed_str}")
+                            
+                            # Set up progress capture
+                            capture = ProgressCapture(progress_info, comp_name)
+                            old_stdout = sys.stdout
+                            old_stderr = sys.stderr
+                            
+                            try:
+                                sys.stdout = capture
+                                sys.stderr = capture
+                                
+                                # Download using hf_hub_download with progress tracking
+                                logger.info(f"Downloading {filename} from {repo_id}")
+                                file_path = hf_hub_download(
+                                    repo_id=repo_id,
+                                    filename=filename,
+                                    local_dir=str(local_dir),
+                                    token=self.hf_token,
+                                    resume_download=True,
+                                    force_download=False,
+                                    local_dir_use_symlinks=False
+                                )
+                                
+                                logger.info(f"Download complete: {comp_name} saved at {file_path}")
+                            finally:
+                                sys.stdout = old_stdout
+                                sys.stderr = old_stderr
+                        except Exception as dl_error:
+                            logger.error(f"Download failed for {comp_name}: {str(dl_error)}")
+                            download_error = str(dl_error)
+                            raise
+                    
+                    download_complete = True
+                    
+                except Exception as e:
+                    download_error = str(e)
+                    logger.error(f"GGUF download error: {download_error}")
+            
+            # Start download thread
+            download_thread = threading.Thread(target=gguf_download_thread)
+            download_thread.start()
+            
+            # Monitor progress and yield updates
+            total_components = len(components_to_download)
+            last_component_idx = -1
+            
+            # Initial progress at 0%
+            if progress:
+                progress(0.0, desc="Starting GGUF download...")
+            
+            # Show initial status
+            yield f"""
+<div class="info-box">
+    <h4>📥 Preparing Download</h4>
+    <p><strong>Total Components:</strong> {total_components}</p>
+    <p><strong>Status:</strong> Initializing download...</p>
+</div>
+"""
+            
+            thread_check_count = 0
+            last_status = ""
+            while download_thread.is_alive() or (not download_complete and not download_error):
+                thread_check_count += 1
+                if thread_check_count == 1:
+                    logger.info(f"Download thread alive: {download_thread.is_alive()}, complete: {download_complete}, error: {download_error}")
+                
+                if self.stop_download_flag:
+                    yield f"""
+<div class="warning-box">
+    <h4>⚠️ Download Stopped</h4>
+    <p>Download was cancelled by user.</p>
+</div>
+"""
+                    break
+                
+                # Get current status from progress info
+                current_status = progress_info.current_task
+                
+                # Update UI whenever status changes
+                if current_status != last_status:
+                    last_status = current_status
+                    
+                    # Bound check to prevent index errors
+                    if current_component_idx < len(components_to_download):
+                        comp_name = components_to_download[current_component_idx][0]
+                        filename = components_to_download[current_component_idx][1]
+                        
+                        # Calculate overall progress based on component index and download progress
+                        base_progress = current_component_idx / total_components
+                        
+                        # Extract percentage and details from status if available
+                        component_progress = 0
+                        download_details = ""
+                        
+                        if current_status and "%" in current_status:
+                            try:
+                                # Extract percentage from status like "GGUF Model: 45% - 5.6G/12.5G @ 38.7MB/s (ETA: 00:03:21)"
+                                import re
+                                match = re.search(r'(\d+)%', current_status)
+                                if match:
+                                    component_progress = float(match.group(1)) / 100.0
+                                
+                                # Extract download details
+                                details_match = re.search(r'(\d+)%\s*-\s*([^@]+)@\s*([^(]+)(?:\(ETA:\s*([^)]+)\))?', current_status)
+                                if details_match:
+                                    size_info = details_match.group(2).strip()
+                                    speed_info = details_match.group(3).strip()
+                                    eta_info = details_match.group(4) if details_match.group(4) else "calculating..."
+                                    download_details = f"""
+                                    <p style="font-size: 0.9em; color: #666;">
+                                        <strong>Size:</strong> {size_info} | 
+                                        <strong>Speed:</strong> {speed_info} | 
+                                        <strong>ETA:</strong> {eta_info}
+                                    </p>"""
+                            except Exception as e:
+                                logger.debug(f"Error parsing progress: {e}")
+                                component_progress = 0
+                        
+                        # Calculate total progress
+                        progress_pct = base_progress + (component_progress / total_components)
+                        
+                        if progress:
+                            progress(progress_pct, desc=current_status or f"Downloading {comp_name}")
+                        
+                        yield f"""
+<div class="info-box">
+    <h4>📥 Downloading GGUF Model - Component {current_component_idx + 1}/{total_components}</h4>
+    <p><strong>Component:</strong> {comp_name}</p>
+    <p><strong>File:</strong> {filename}</p>
+    <p><strong>Status:</strong> {current_status or 'Preparing download...'}</p>
+    {download_details}
+    
+    <div style="margin: 10px 0;">
+        <div style="font-size: 0.9em; color: #666; margin-bottom: 4px;">Component Progress:</div>
+        <div style="background-color: #e0e0e0; border-radius: 5px; padding: 2px;">
+            <div style="width: {int(component_progress * 100)}%; height: 20px; background: linear-gradient(to right, #66bb6a, #4caf50); border-radius: 4px; text-align: center; color: white; line-height: 20px; font-weight: bold;">
+                {int(component_progress * 100)}%
+            </div>
+        </div>
+    </div>
+    
+    <div style="margin: 10px 0;">
+        <div style="font-size: 0.9em; color: #666; margin-bottom: 4px;">Overall Progress:</div>
+        <div style="background-color: #e0e0e0; border-radius: 5px; padding: 2px;">
+            <div style="width: {int(progress_pct * 100)}%; height: 20px; background: linear-gradient(to right, #64b5f6, #2196f3); border-radius: 4px; text-align: center; color: white; line-height: 20px; font-weight: bold;">
+                {int(progress_pct * 100)}%
+            </div>
+        </div>
+    </div>
+    
+    {f'<p style="color: #666; font-size: 0.9em; margin-top: 10px;">💡 Using hf_transfer for accelerated downloads</p>' if 'hf_transfer' in sys.modules else ''}
+</div>
+"""
+                
+                # Small delay to prevent busy waiting
+                time.sleep(0.1)  # Reduced delay for more responsive updates
+            
+            # Wait for thread to complete
+            download_thread.join(timeout=5)
+            
+            logger.info(f"Download thread finished. Complete: {download_complete}, Error: {download_error}")
+            
+            # Check for errors
+            if download_error:
+                yield f"""
+<div class="error-box">
+    <h4>❌ Download Failed</h4>
+    <p><strong>Error:</strong> {download_error}</p>
+</div>
+"""
+                raise Exception(download_error)
+            
+            # Check if download actually completed
+            if download_complete:
+                # Success message
+                if progress:
+                    progress(1.0, desc="All components downloaded!")
+                
+                yield f"""
+<div class="success-box">
+    <h4>✅ GGUF Model Downloaded Successfully!</h4>
+    <p><strong>Model:</strong> {config.name}</p>
+    <p><strong>Location:</strong> {gguf_dir}</p>
+    <p>All components have been downloaded and are ready to use.</p>
+</div>
+""", *self.get_model_selection_data()
+            else:
+                logger.warning("Download thread ended but download not marked complete")
+                yield f"""
+<div class="warning-box">
+    <h4>⚠️ Download Status Unclear</h4>
+    <p>The download process ended but completion status is uncertain.</p>
+    <p>Please check the console logs for more details.</p>
+</div>
+""", *self.get_model_selection_data()
+            
+        except Exception as e:
+            logger.error(f"Error in GGUF download: {str(e)}")
+            yield f"""
+<div class="error-box">
+    <h4>❌ Download Failed</h4>
+    <p><strong>Error:</strong> {str(e)}</p>
+</div>
+""", *self.get_model_selection_data()
+        finally:
+            # Reset download flags
+            self.download_in_progress = False
+            self.current_download_model = None
+
     def _load_gguf_model(self, model_path, config, device_to_use, dtype_to_use, progress):
         """Download and prepare GGUF model components."""
         
@@ -1610,7 +2516,10 @@ class ModelManager:
             total_components = 4  # GGUF file + VAE + 2 text encoders
             
             # 1. Download GGUF file
-            progress(0.1, desc=f"Downloading GGUF file: {config.gguf_file}")
+            if progress:
+                progress(0.1, desc=f"Downloading GGUF file: {config.gguf_file}")
+            else:
+                logger.info(f"Downloading GGUF file: {config.gguf_file}")
             gguf_file_path = gguf_dir / config.gguf_file
             if not gguf_file_path.exists():
                 from huggingface_hub import hf_hub_download
@@ -1623,7 +2532,10 @@ class ModelManager:
             components_downloaded += 1
             
             # 2. Download VAE
-            progress(0.3, desc="Downloading FLUX VAE...")
+            if progress:
+                progress(0.3, desc="Downloading FLUX VAE...")
+            else:
+                logger.info("Downloading FLUX VAE...")
             vae_dir = self.models_dir / "vae"
             vae_dir.mkdir(parents=True, exist_ok=True)
             vae_path = vae_dir / FLUX_COMPONENTS["vae"]["filename"]
@@ -1637,7 +2549,10 @@ class ModelManager:
             components_downloaded += 1
             
             # 3. Download CLIP text encoder
-            progress(0.5, desc="Downloading CLIP text encoder...")
+            if progress:
+                progress(0.5, desc="Downloading CLIP text encoder...")
+            else:
+                logger.info("Downloading CLIP text encoder...")
             te_dir = self.models_dir / "text_encoders"
             te_dir.mkdir(parents=True, exist_ok=True)
             clip_path = te_dir / FLUX_COMPONENTS["text_encoder_clip"]["filename"]
@@ -1651,7 +2566,10 @@ class ModelManager:
             components_downloaded += 1
             
             # 4. Download T5 text encoder
-            progress(0.7, desc="Downloading T5 text encoder...")
+            if progress:
+                progress(0.7, desc="Downloading T5 text encoder...")
+            else:
+                logger.info("Downloading T5 text encoder...")
             t5_path = te_dir / FLUX_COMPONENTS["text_encoder_t5"]["filename"]
             if not t5_path.exists():
                 hf_hub_download(
@@ -1662,7 +2580,10 @@ class ModelManager:
                 )
             components_downloaded += 1
             
-            progress(1.0, desc="GGUF model components downloaded!")
+            if progress:
+                progress(1.0, desc="GGUF model components downloaded!")
+            else:
+                logger.info("GGUF model components downloaded!")
             
             # Return success message with file locations
             success_message = f"""
@@ -1746,6 +2667,9 @@ class ModelManager:
                 config = IMAGE_MODELS[model_name]
             elif model_name in GATED_IMAGE_MODELS:
                 config = GATED_IMAGE_MODELS[model_name]
+            elif model_name in GGUF_IMAGE_MODELS:
+                # GGUF models require special handling
+                return self._load_gguf_image_model(model_name, current_model, current_model_name, device, progress)
             else:
                 return f"❌ Unknown model: {model_name}", None, None
 
@@ -1761,6 +2685,25 @@ class ModelManager:
 
             if not model_path.exists():
                 return f"❌ Model {model_name} not found. Please download it first.", None, None
+            
+            # Check if this is a HuggingFace cache directory structure
+            subdirs = [d for d in model_path.iterdir() if d.is_dir()]
+            hf_cache_dirs = [d for d in subdirs if d.name.startswith("models--")]
+            
+            if hf_cache_dirs:
+                # This is a HF cache structure, need to look inside for the actual model
+                for hf_cache_dir in hf_cache_dirs:
+                    snapshots_dir = hf_cache_dir / "snapshots"
+                    if snapshots_dir.exists():
+                        # Get the latest snapshot (usually there's only one)
+                        snapshot_dirs = [d for d in snapshots_dir.iterdir() if d.is_dir()]
+                        if snapshot_dirs:
+                            # Use the first (and usually only) snapshot
+                            model_path = snapshot_dirs[0]
+                            logger.info(f"Using model from HuggingFace cache: {model_path}")
+                            break
+                else:
+                    return f"❌ Model {model_name} found but no valid snapshot in HuggingFace cache.", None, None
 
             # Unload current model
             if current_model:
@@ -2146,6 +3089,25 @@ class ModelManager:
 
             if not model_path.exists():
                 return f"❌ Model {model_name} not found. Please download it first.", None, None
+            
+            # Check if this is a HuggingFace cache directory structure
+            subdirs = [d for d in model_path.iterdir() if d.is_dir()]
+            hf_cache_dirs = [d for d in subdirs if d.name.startswith("models--")]
+            
+            if hf_cache_dirs:
+                # This is a HF cache structure, need to look inside for the actual model
+                for hf_cache_dir in hf_cache_dirs:
+                    snapshots_dir = hf_cache_dir / "snapshots"
+                    if snapshots_dir.exists():
+                        # Get the latest snapshot (usually there's only one)
+                        snapshot_dirs = [d for d in snapshots_dir.iterdir() if d.is_dir()]
+                        if snapshot_dirs:
+                            # Use the first (and usually only) snapshot
+                            model_path = snapshot_dirs[0]
+                            logger.info(f"Using 3D model from HuggingFace cache: {model_path}")
+                            break
+                else:
+                    return f"❌ Model {model_name} found but no valid snapshot in HuggingFace cache.", None, None
 
             # Unload current model
             if current_model:
@@ -2182,6 +3144,270 @@ class ModelManager:
         except Exception as e:
             logger.error(f"Error loading 3D model: {str(e)}")
             return f"❌ Error loading model: {str(e)}", None, None
+
+    def _load_gguf_image_model(self, model_name, current_model, current_model_name, device, progress):
+        """Load a GGUF image generation model using diffusers"""
+        try:
+            from .config import GGUF_IMAGE_MODELS, FLUX_COMPONENTS
+            
+            # Check if model is already loaded
+            if current_model and current_model_name == model_name:
+                return f"✅ {model_name} is already loaded!", current_model, current_model_name
+            
+            # Get config
+            config = GGUF_IMAGE_MODELS[model_name]
+            
+            # Check if GGUF model is downloaded
+            if not self.check_gguf_model_complete(model_name):
+                return f"❌ GGUF model {model_name} is not downloaded. Please download it first.", None, None
+            
+            # Unload current model if any
+            if current_model:
+                progress(0.1, desc="Unloading current model...")
+                del current_model
+                current_model = None
+                current_model_name = None
+                self._free_memory()
+            
+            progress(0.2, desc=f"Preparing to load GGUF model {model_name}...")
+            
+            # For the existing FLUX.1-dev-Q8 model, use the already downloaded file
+            if model_name == "FLUX.1-dev-Q8":
+                # Find the GGUF file
+                gguf_file = self._find_gguf_file(model_name, config.gguf_file)
+                if not gguf_file:
+                    return f"❌ GGUF file not found for {model_name}", None, None
+                
+                # Create a model info for the existing Q8 model
+                model_info = GGUFModelInfo(
+                    name=model_name,
+                    quantization="8",
+                    file_size_gb=12.5,
+                    memory_required_gb=14.0,
+                    repo_id="city96/FLUX.1-dev-gguf",
+                    filename=config.gguf_file,
+                    url="",
+                    quality_score=0.98,
+                    min_vram_gb=12.0
+                )
+                
+                # Use the existing file path
+                model_path = gguf_file
+                recommended_model = model_info
+            else:
+                # Get available VRAM and recommend quantization
+                available_vram = self.gguf_manager.get_available_vram()
+                logger.info(f"Available VRAM: {available_vram:.1f}GB")
+                
+                # Determine model type (flux-dev or flux-schnell)
+                model_type = "flux-dev" if "dev" in model_name.lower() else "flux-schnell"
+                
+                # Get recommended quantization based on available VRAM
+                recommended_model = self.gguf_manager.recommend_quantization(model_type)
+                
+                if not recommended_model:
+                    return f"❌ Not enough VRAM for any GGUF variant. Available: {available_vram:.1f}GB", None, None
+                
+                # Check if model is downloaded, if not download it
+                if not self.gguf_manager.is_model_cached(recommended_model):
+                    progress(0.3, desc=f"Downloading {recommended_model.name} ({recommended_model.file_size_gb:.1f}GB)...")
+                    try:
+                        model_path = self.gguf_manager.download_model(recommended_model)
+                    except Exception as e:
+                        return f"❌ Failed to download GGUF model: {str(e)}", None, None
+                else:
+                    model_path = self.gguf_manager.get_model_path(recommended_model)
+            
+            logger.info(f"Loading GGUF variant: {recommended_model.name} (Q{recommended_model.quantization})")
+            
+            progress(0.5, desc=f"Loading GGUF transformer ({model_path.stat().st_size / (1024**3):.1f}GB file)... This may take 1-2 minutes")
+            
+            # Determine compute dtype based on device
+            if device == "cpu":
+                compute_dtype = torch.float32
+            else:
+                compute_dtype = torch.bfloat16
+            
+            try:
+                # Load GGUF transformer
+                transformer = self.gguf_manager.load_transformer(
+                    recommended_model,
+                    compute_dtype=compute_dtype,
+                    device_map="auto" if device == "cuda" else "cpu",
+                    model_path=model_path  # Pass the actual path
+                )
+                
+                progress(0.7, desc="Loading FLUX pipeline components...")
+                
+                # Create pipeline with GGUF transformer
+                base_model_id = "black-forest-labs/FLUX.1-dev" if "dev" in model_name.lower() else "black-forest-labs/FLUX.1-schnell"
+                
+                # Capture download progress
+                import sys
+                from io import StringIO
+                
+                class ProgressCapture:
+                    def __init__(self, progress_callback):
+                        self.progress_callback = progress_callback
+                        self.buffer = StringIO()
+                        self.last_update = time.time()
+                        
+                    def write(self, text):
+                        self.buffer.write(text)
+                        current_time = time.time()
+                        
+                        # Update frequently for better feedback
+                        if current_time - self.last_update > 0.2 or any(keyword in text for keyword in ["Fetching", "%", "Downloading", "Loading"]):
+                            # Clean up the text
+                            cleaned_text = text.strip().replace('\r', '').replace('\n', ' ')
+                            
+                            # Extract progress info
+                            if "Fetching" in cleaned_text and "files:" in cleaned_text:
+                                # Parse fetching progress: "Fetching 19 files: 21%|██ | 4/19"
+                                import re
+                                match = re.search(r'Fetching (\d+) files:.*?(\d+)%.*?(\d+)/(\d+)', cleaned_text)
+                                if match:
+                                    total_files = int(match.group(1))
+                                    percent = int(match.group(2))
+                                    current = int(match.group(3))
+                                    total = int(match.group(4))
+                                    # Calculate overall progress (0.7 to 0.9 range)
+                                    overall_progress = 0.7 + (percent / 100.0) * 0.2
+                                    self.progress_callback(overall_progress, desc=f"Downloading FLUX components: {current}/{total} files ({percent}%)")
+                            elif "Downloading" in cleaned_text and "model" in cleaned_text.lower():
+                                self.progress_callback(0.75, desc=cleaned_text[:100])  # Limit length
+                            elif "Loading" in cleaned_text:
+                                self.progress_callback(0.85, desc=cleaned_text[:100])
+                            
+                            self.last_update = current_time
+                    
+                    def flush(self):
+                        pass
+                
+                # Redirect stdout to capture progress
+                old_stdout = sys.stdout
+                old_stderr = sys.stderr
+                progress_capture = ProgressCapture(progress)
+                
+                try:
+                    sys.stdout = progress_capture
+                    sys.stderr = progress_capture
+                    
+                    logger.info(f"Downloading FLUX pipeline components from {base_model_id}")
+                    
+                    # Check if we have the base model cached locally
+                    flux_cache_dir = self.models_dir / "flux_base" / base_model_id.replace("/", "--")
+                    
+                    # For GGUF models, we'll download components individually as needed
+                    # This avoids the large FLUX base model download
+                    logger.info("Loading FLUX pipeline with GGUF transformer and individual components")
+                    
+                    try:
+                        # Check if we need HF token for gated model
+                        if "dev" in model_name.lower() and not self.hf_token:
+                            raise Exception("""
+                            FLUX.1-dev requires Hugging Face authentication.
+                            Please:
+                            1. Go to https://huggingface.co/black-forest-labs/FLUX.1-dev
+                            2. Accept the license agreement
+                            3. Get your token from https://huggingface.co/settings/tokens
+                            4. Set it in the Model Manager tab
+                            """)
+                        
+                        # Try loading from HuggingFace directly, which will download only needed components
+                        pipeline = FluxPipeline.from_pretrained(
+                            base_model_id,
+                            transformer=transformer,  # Use our GGUF transformer
+                            torch_dtype=compute_dtype,
+                            token=self.hf_token if self.hf_token else None,
+                            low_cpu_mem_usage=True,
+                            local_files_only=False,  # Allow downloading missing components
+                            cache_dir=str(self.models_dir / "flux_base")  # Use our cache directory
+                        )
+                        logger.info("FLUX pipeline loaded successfully with GGUF transformer")
+                    except Exception as e:
+                        logger.error(f"Failed to load FLUX pipeline: {str(e)}")
+                        
+                        # If that fails, try a more manual approach
+                        logger.info("Attempting alternative loading method...")
+                        
+                        # Download individual components
+                        from transformers import T5EncoderModel, CLIPTextModel
+                        from diffusers import AutoencoderKL
+                        
+                        progress(0.75, desc="Downloading VAE...")
+                        vae = AutoencoderKL.from_pretrained(
+                            base_model_id,
+                            subfolder="vae",
+                            torch_dtype=compute_dtype,
+                            token=self.hf_token,
+                            cache_dir=str(self.models_dir / "flux_base")
+                        )
+                        
+                        progress(0.8, desc="Downloading CLIP text encoder...")
+                        text_encoder = CLIPTextModel.from_pretrained(
+                            base_model_id,
+                            subfolder="text_encoder",
+                            torch_dtype=compute_dtype,
+                            token=self.hf_token,
+                            cache_dir=str(self.models_dir / "flux_base")
+                        )
+                        
+                        progress(0.85, desc="Downloading T5 text encoder...")
+                        text_encoder_2 = T5EncoderModel.from_pretrained(
+                            base_model_id,
+                            subfolder="text_encoder_2",
+                            torch_dtype=compute_dtype,
+                            token=self.hf_token,
+                            cache_dir=str(self.models_dir / "flux_base")
+                        )
+                        
+                        # Create pipeline manually
+                        pipeline = FluxPipeline(
+                            transformer=transformer,
+                            vae=vae,
+                            text_encoder=text_encoder,
+                            text_encoder_2=text_encoder_2,
+                            scheduler=None,  # Will use default
+                            tokenizer=None,  # Will be loaded from text encoder
+                            tokenizer_2=None  # Will be loaded from text encoder 2
+                        )
+                finally:
+                    sys.stdout = old_stdout
+                    sys.stderr = old_stderr
+                
+                # Enable memory optimizations
+                if device == "cuda":
+                    pipeline.enable_model_cpu_offload()
+                else:
+                    pipeline = pipeline.to(device)
+                
+                # Mark pipeline as using GGUF model
+                pipeline._is_gguf_model = True
+                pipeline._gguf_model_info = recommended_model
+                
+                progress(1.0, desc="GGUF model loaded successfully!")
+                
+                # Store model
+                self.image_model = pipeline
+                self.image_model_name = model_name
+                
+                return f"""✅ GGUF model loaded successfully!
+Model: {recommended_model.name}
+Quantization: {recommended_model.quantization}
+Quality Score: {recommended_model.quality_score:.0%}
+VRAM Usage: ~{recommended_model.min_vram_gb}GB""", pipeline, model_name
+                
+            except ImportError as e:
+                if "GGUFQuantizationConfig" in str(e) or "gguf" in str(e).lower():
+                    return f"""❌ GGUF support not available in your diffusers version.
+Please upgrade diffusers: pip install --upgrade diffusers>=0.31.0 gguf""", None, None
+                else:
+                    raise
+            
+        except Exception as e:
+            logger.error(f"Error loading GGUF model: {str(e)}")
+            return f"❌ Failed to load GGUF model: {str(e)}", None, None
 
     def unload_image_model(self):
         """Unload the current image model"""
@@ -2293,18 +3519,8 @@ class ModelManager:
         if len(downloaded_hunyuan_models) == 1:
             selected_hunyuan_model = downloaded_hunyuan_models[0]
 
-        image_dropdown_update = gr.update(
-            choices=image_dropdown_choices,
-            value=selected_image_model,
-            interactive=len(image_dropdown_choices) > 0
-        )
-        hunyuan_dropdown_update = gr.update(
-            choices=hunyuan_dropdown_choices,
-            value=selected_hunyuan_model,
-            interactive=len(hunyuan_dropdown_choices) > 0
-        )
-
-        return image_dropdown_update, hunyuan_dropdown_update, image_dropdown_update, hunyuan_dropdown_update
+        # Return simple values instead of gr.update objects to avoid schema issues
+        return image_dropdown_choices, hunyuan_dropdown_choices, image_dropdown_choices, hunyuan_dropdown_choices
 
     def _format_bytes(self, bytes):
         """Format bytes to human readable format"""

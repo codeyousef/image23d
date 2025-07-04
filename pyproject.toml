@@ -3,17 +3,18 @@ name = "hunyuan3d-app"
 version = "0.1.0"
 requires-python = ">=3.10,<3.12"
 dependencies = [
-    # Core - Fixed compatible versions  
-    "gradio==4.44.0",  # Known stable version without schema issues
-    "torch==2.5.1",
-    "torchvision==0.20.1", 
-    "torchaudio==2.5.1",
+    # Core - More flexible compatible versions  
+    "gradio>=5.0.0",  # Use newer version to avoid urllib3 conflicts
+    "torch>=2.4.0",
+    "torchvision>=0.19.0", 
+    "torchaudio>=2.4.0",
 
     # ML/AI - Compatible versions
-    "transformers==4.46.0",
-    "diffusers==0.31.0",
-    "accelerate==0.34.0",
+    "transformers>=4.46.1",  # Fixed version for Python 3.8+ compatibility
+    "diffusers>=0.32.0",  # Supports GGUF model loading
+    "accelerate>=0.32.0",
     "huggingface-hub>=0.19.0",
+    "hf_transfer>=0.1.0",  # For faster HuggingFace downloads
     "safetensors>=0.4.0",
     "sentencepiece",
     "gguf>=0.10.0",  # For GGUF model support
@@ -45,6 +46,10 @@ dependencies = [
     "psutil>=5.9.0",  # Added for system monitoring
     "pywin32>=228; platform_system == 'Windows'",  # For Windows-specific functionality
     "pynvml>=11.5.0",  # For NVIDIA GPU detection
+    
+    # Memory optimizations (include by default)
+    "xformers>=0.0.28; platform_system == 'Windows'",  # Windows-compatible xformers
+    "xformers>=0.0.22; platform_system == 'Linux'",    # Linux xformers
 ]
 
 [project.optional-dependencies]
@@ -58,13 +63,11 @@ dev = [
 
 # Windows-specific optimizations
 windows = [
-    # xformers for Windows with CUDA 12.4+
-    "xformers>=0.0.28; sys_platform == 'win32'",
+    # Additional Windows-specific packages can go here
 ]
 
 # Linux-specific optimizations
 linux = [
-    "xformers>=0.0.22; sys_platform == 'linux'",
     "bitsandbytes>=0.41.0; sys_platform == 'linux'",
     "flash-attn>=2.5.0; sys_platform == 'linux'",
     "triton>=2.1.0; sys_platform == 'linux'",
@@ -80,23 +83,42 @@ cuda121 = [
     "triton>=2.1.0; sys_platform == 'linux'",  # For torch.compile optimization
 ]
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/hunyuan3d_app"]
 
 [tool.uv]
-# Use pip's index strategy for finding compatible wheels
-index-strategy = "first-index"
+# Use unsafe-best-match to resolve conflicts across indexes
+index-strategy = "unsafe-best-match"
 
 # Override dependencies that might have conflicts
 override-dependencies = [
     "numba>=0.57.0",
     "llvmlite>=0.40.0",
     "rembg>=2.0.57",
+    "urllib3>=2.0.0,<3.0.0",  # Force compatible urllib3 version
+    "requests>=2.31.0",       # Use newer requests version
+]
+
+# Platform-specific constraints to prevent cross-platform issues
+constraint-dependencies = [
+    "triton>=2.1.0; sys_platform == 'linux'",  # Ensure triton only on Linux
+    "bitsandbytes>=0.41.0; sys_platform == 'linux'",  # Linux only
+    "flash-attn>=2.0.0; sys_platform == 'linux'",  # Linux only
 ]
 
 # Extra index URLs for PyTorch and xformers
 # CUDA 12.4+ compatible (includes CUDA 12.6)
 [[tool.uv.index]]
 name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+priority = 10
+
+# Xformers Windows binaries
+[[tool.uv.index]]
+name = "xformers"
 url = "https://download.pytorch.org/whl/cu124"
 priority = 10

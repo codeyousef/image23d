@@ -229,27 +229,50 @@ class SystemRequirementsChecker:
         try:
             if platform.system() == "Windows":
                 try:
-                    import win32file
-                    drive_letter = os.path.splitdrive(current_dir)[0]
-                    if drive_letter:
-                        drive_type = win32file.GetDriveType(drive_letter)
-                        if drive_type == win32file.DRIVE_FIXED:
-                            # Check if it's likely an SSD (this is a heuristic)
-                            import winreg
-                            try:
-                                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Services\disk\Enum") as key:
-                                    # If we can read this key, it's likely a physical disk
-                                    device_value = winreg.QueryValueEx(key, "0")[0]
-                                    if "SSD" in device_value:
+                    # Method 1: Try PowerShell command to detect SSD
+                    import subprocess
+                    try:
+                        result = subprocess.run(
+                            ["powershell", "-Command", "Get-PhysicalDisk | Select MediaType"],
+                            capture_output=True,
+                            text=True,
+                            timeout=5
+                        )
+                        if result.returncode == 0 and "SSD" in result.stdout:
+                            storage_type = "SSD"
+                        elif result.returncode == 0 and "HDD" in result.stdout:
+                            storage_type = "HDD"
+                        else:
+                            # Default to SSD for modern systems
+                            storage_type = "SSD"
+                    except:
+                        # Method 2: Try win32file if available
+                        try:
+                            import win32file
+                            drive_letter = os.path.splitdrive(current_dir)[0]
+                            if drive_letter:
+                                drive_type = win32file.GetDriveType(drive_letter)
+                                if drive_type == win32file.DRIVE_FIXED:
+                                    # Check if it's likely an SSD (this is a heuristic)
+                                    import winreg
+                                    try:
+                                        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Services\disk\Enum") as key:
+                                            # If we can read this key, it's likely a physical disk
+                                            device_value = winreg.QueryValueEx(key, "0")[0]
+                                            if "SSD" in device_value:
+                                                storage_type = "SSD"
+                                            else:
+                                                storage_type = "HDD"
+                                    except:
+                                        # If we can't determine, default to SSD for modern systems
+                                        # Most modern Windows systems use SSDs
                                         storage_type = "SSD"
-                                    else:
-                                        storage_type = "HDD"
-                            except:
-                                # If we can't determine, assume HDD (worst case)
-                                storage_type = "HDD"
-                except ImportError:
-                    logger.warning("win32file module not available. Cannot determine storage type.")
-                    storage_type = "Unknown"
+                        except ImportError:
+                            # Default to SSD for modern systems
+                            storage_type = "SSD"
+                except:
+                    # Default to SSD for modern systems
+                    storage_type = "SSD"
             elif platform.system() == "Linux":
                 # On Linux, we can check if the device is rotational
                 try:
@@ -452,14 +475,7 @@ class SystemRequirementsChecker:
             "batch_processing": {"available": True, "status": "ok"}  # Always available
         }
 
-        # Check for ONNX Runtime
-        try:
-            import onnxruntime
-            optimizations["onnx_runtime"]["available"] = True
-            optimizations["onnx_runtime"]["status"] = "ok"
-        except ImportError:
-            self.warnings.append("ONNX Runtime not installed. Inference acceleration will not be available.")
-            self.recommendations.append("Install onnxruntime-gpu for faster inference.")
+        # ONNX Runtime check removed - not used in this app
 
         # Check for TensorRT
         try:
@@ -521,14 +537,7 @@ class SystemRequirementsChecker:
             "upscaler": {"available": False, "status": "warning"}
         }
 
-        # Check for LoRA support
-        try:
-            from diffusers import LoraLoaderMixin
-            enhancements["lora_support"]["available"] = True
-            enhancements["lora_support"]["status"] = "ok"
-        except ImportError:
-            self.warnings.append("LoRA support not available. Style customization will be limited.")
-            self.recommendations.append("Use a newer version of diffusers for LoRA support.")
+        # LoRA check removed - not used in this app
 
         # Check for ControlNet
         try:
@@ -570,9 +579,9 @@ class SystemRequirementsChecker:
 
         # Start building the HTML
         html = """
-        <div class="system-requirements" style="color: #212529;">
-            <h3 style="color: #212529;">System Requirements Check</h3>
-            <div class="requirements-summary" style="color: #212529;">
+        <div class="system-requirements">
+            <h3>System Requirements Check</h3>
+            <div class="requirements-summary">
         """
 
         # Overall status
@@ -580,7 +589,7 @@ class SystemRequirementsChecker:
         html += f"""
             <div class="overall-status {overall_status}">
                 <span class="status-icon">{status_icons[overall_status]}</span>
-                <span class="status-text" style="color: inherit;">
+                <span class="status-text">
                     {"System does not meet minimum requirements" if overall_status == "error" else
                      "System meets minimum but not recommended requirements" if overall_status == "warning" else
                      "System meets all recommended requirements"}
@@ -590,18 +599,18 @@ class SystemRequirementsChecker:
 
         # Computational Requirements section
         html += """
-            <div class="requirements-section" style="color: #212529;">
-                <h4 style="color: #212529;">Computational Requirements</h4>
-                <ul style="color: #212529;">
+            <div class="requirements-section">
+                <h4>Computational Requirements</h4>
+                <ul>
         """
 
         # GPU
         if "gpu" in self.results:
             gpu_result = self.results["gpu"]
             html += f"""
-                <li style="color: #212529;">
+                <li>
                     <span class="status-icon">{status_icons[gpu_result["status"]]}</span>
-                    <strong style="color: #212529;">GPU:</strong> {gpu_result["device_name"] if gpu_result["available"] else "Not available"}
+                    <strong>GPU:</strong> {gpu_result["device_name"] if gpu_result["available"] else "Not available"}
                     {f"({gpu_result['vram_gb']}GB VRAM)" if gpu_result["available"] and gpu_result["vram_gb"] > 0 else ""}
                 </li>
             """
@@ -610,9 +619,9 @@ class SystemRequirementsChecker:
         if "ram" in self.results:
             ram_result = self.results["ram"]
             html += f"""
-                <li style="color: #212529;">
+                <li>
                     <span class="status-icon">{status_icons[ram_result["status"]]}</span>
-                    <strong style="color: #212529;">System RAM:</strong> {ram_result["total_gb"]}GB
+                    <strong>System RAM:</strong> {ram_result["total_gb"]}GB
                 </li>
             """
 
@@ -620,9 +629,9 @@ class SystemRequirementsChecker:
         if "storage" in self.results:
             storage_result = self.results["storage"]
             html += f"""
-                <li style="color: #212529;">
+                <li>
                     <span class="status-icon">{status_icons[storage_result["status"]]}</span>
-                    <strong style="color: #212529;">Storage:</strong> {storage_result["storage_type"]}, {storage_result["free_space_gb"]}GB free
+                    <strong>Storage:</strong> {storage_result["storage_type"]}, {storage_result["free_space_gb"]}GB free
                 </li>
             """
 
@@ -633,18 +642,18 @@ class SystemRequirementsChecker:
 
         # Software Stack section
         html += """
-            <div class="requirements-section" style="color: #212529;">
-                <h4 style="color: #212529;">Software Stack</h4>
-                <ul style="color: #212529;">
+            <div class="requirements-section">
+                <h4>Software Stack</h4>
+                <ul>
         """
 
         # PyTorch
         if "pytorch" in self.results:
             pytorch_result = self.results["pytorch"]
             html += f"""
-                <li style="color: #212529;">
+                <li>
                     <span class="status-icon">{status_icons[pytorch_result["status"]]}</span>
-                    <strong style="color: #212529;">PyTorch:</strong> {pytorch_result["version"]}
+                    <strong>PyTorch:</strong> {pytorch_result["version"]}
                     {f"with CUDA {pytorch_result['cuda_version']}" if pytorch_result["cuda_available"] and pytorch_result["cuda_version"] else
                      "(without CUDA)" if not pytorch_result["cuda_available"] else ""}
                 </li>
@@ -655,9 +664,9 @@ class SystemRequirementsChecker:
             libraries = self.results["libraries"]
             for lib_name, lib_info in libraries.items():
                 html += f"""
-                <li style="color: #212529;">
+                <li>
                     <span class="status-icon">{status_icons[lib_info["status"]]}</span>
-                    <strong style="color: #212529;">{lib_name}:</strong> {lib_info["installed"] if lib_info["installed"] else "Not installed"}
+                    <strong>{lib_name}:</strong> {lib_info["installed"] if lib_info["installed"] else "Not installed"}
                     {f"(min: {lib_info['min_version']})" if lib_info["min_version"] else ""}
                 </li>
                 """
@@ -670,20 +679,20 @@ class SystemRequirementsChecker:
         # Text Encoders section
         if "text_encoders" in self.results:
             html += """
-            <div class="requirements-section" style="color: #212529;">
-                <h4 style="color: #212529;">Text Encoders</h4>
-                <ul style="color: #212529;">
+            <div class="requirements-section">
+                <h4>Text Encoders</h4>
+                <ul>
             """
 
             encoders = self.results["text_encoders"]
             html += f"""
-                <li style="color: #212529;">
+                <li>
                     <span class="status-icon">{status_icons[encoders["clip_l"]["status"]]}</span>
-                    <strong style="color: #212529;">CLIP-L:</strong> {"Available" if encoders["clip_l"]["available"] else "Not available"}
+                    <strong>CLIP-L:</strong> {"Available" if encoders["clip_l"]["available"] else "Not available"}
                 </li>
-                <li style="color: #212529;">
+                <li>
                     <span class="status-icon">{status_icons[encoders["t5"]["status"]]}</span>
-                    <strong style="color: #212529;">T5:</strong> {"Available" if encoders["t5"]["available"] else "Not available"}
+                    <strong>T5:</strong> {"Available" if encoders["t5"]["available"] else "Not available"}
                 </li>
             """
 
@@ -694,22 +703,22 @@ class SystemRequirementsChecker:
 
         # Optimizations section
         html += """
-            <div class="requirements-section" style="color: #212529;">
-                <h4 style="color: #212529;">Optimizations</h4>
-                <ul style="color: #212529;">
+            <div class="requirements-section">
+                <h4>Optimizations</h4>
+                <ul>
         """
 
         # Memory optimizations
         if "memory_optimizations" in self.results:
             memory_opts = self.results["memory_optimizations"]
             html += f"""
-                <li style="color: #212529;">
+                <li>
                     <span class="status-icon">{status_icons["ok" if memory_opts["fp16_support"]["available"] else "warning"]}</span>
-                    <strong style="color: #212529;">FP16 Support:</strong> {"Available" if memory_opts["fp16_support"]["available"] else "Not available"}
+                    <strong>FP16 Support:</strong> {"Available" if memory_opts["fp16_support"]["available"] else "Not available"}
                 </li>
-                <li style="color: #212529;">
+                <li>
                     <span class="status-icon">{status_icons["ok" if memory_opts["model_quantization"]["available"] else "warning"]}</span>
-                    <strong style="color: #212529;">Model Quantization:</strong> {"Available" if memory_opts["model_quantization"]["available"] else "Not available"}
+                    <strong>Model Quantization:</strong> {"Available" if memory_opts["model_quantization"]["available"] else "Not available"}
                 </li>
             """
 
@@ -717,13 +726,13 @@ class SystemRequirementsChecker:
         if "speed_optimizations" in self.results:
             speed_opts = self.results["speed_optimizations"]
             html += f"""
-                <li style="color: #212529;">
+                <li>
                     <span class="status-icon">{status_icons["ok" if speed_opts["torch_compile"]["available"] else "warning"]}</span>
-                    <strong style="color: #212529;">Torch Compile:</strong> {"Available" if speed_opts["torch_compile"]["available"] else "Not available"}
+                    <strong>Torch Compile:</strong> {"Available" if speed_opts["torch_compile"]["available"] else "Not available"}
                 </li>
-                <li style="color: #212529;">
+                <li>
                     <span class="status-icon">{status_icons["ok" if speed_opts["onnx_runtime"]["available"] else "warning"]}</span>
-                    <strong style="color: #212529;">ONNX Runtime:</strong> {"Available" if speed_opts["onnx_runtime"]["available"] else "Not available"}
+                    <strong>ONNX Runtime:</strong> {"Available" if speed_opts["onnx_runtime"]["available"] else "Not available"}
                 </li>
             """
 
@@ -735,14 +744,14 @@ class SystemRequirementsChecker:
         # Recommendations section
         if self.recommendations:
             html += """
-            <div class="requirements-section recommendations" style="color: #0c5460;">
-                <h4 style="color: #0c5460;">Recommendations</h4>
-                <ul style="color: #0c5460;">
+            <div class="requirements-section recommendations">
+                <h4>Recommendations</h4>
+                <ul>
             """
 
             for recommendation in self.recommendations:
                 html += f"""
-                <li style="color: #0c5460;">{recommendation}</li>
+                <li>{recommendation}</li>
                 """
 
             html += """

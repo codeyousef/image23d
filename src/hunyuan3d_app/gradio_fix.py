@@ -5,6 +5,12 @@ This file contains a monkey patch to fix the TypeError: argument of type 'bool' 
 
 import gradio as gr
 from gradio_client import utils as gradio_utils
+try:
+    from gradio_client.utils import APIInfoParseError
+except ImportError:
+    # Fallback if APIInfoParseError is not available
+    class APIInfoParseError(Exception):
+        pass
 
 def patched_get_type(schema):
     """
@@ -39,7 +45,7 @@ def patched_get_type(schema):
 
 def patched_json_schema_to_python_type(schema, defs=None):
     """
-    Patched version that handles boolean schemas gracefully
+    Patched version that handles boolean schemas and parse errors gracefully
     """
     if isinstance(schema, bool):
         return "any"
@@ -52,6 +58,16 @@ def patched_json_schema_to_python_type(schema, defs=None):
         return gradio_utils._json_schema_to_python_type(schema, defs)
     except TypeError as e:
         if "argument of type 'bool' is not iterable" in str(e):
+            return "any"
+        raise
+    except APIInfoParseError as e:
+        # Handle APIInfoParseError specifically
+        print(f"⚠️ Gradio schema parsing error (handled): {e}")
+        return "any"
+    except Exception as e:
+        # Handle other parsing errors
+        if "Cannot parse schema" in str(e):
+            print(f"⚠️ Gradio schema parsing error (handled): {e}")
             return "any"
         raise
 

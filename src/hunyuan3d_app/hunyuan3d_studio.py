@@ -114,8 +114,17 @@ class Hunyuan3DStudio:
         return self.model_manager.download_model("image", model_name, progress)
     
     def download_gguf_model(self, model_name, force_redownload, progress):
-        """Download a GGUF model and components"""
+        """Download a GGUF model and components - generator version for UI updates"""
         from .config import GGUF_IMAGE_MODELS
+        
+        # Start with initial message
+        yield """
+<div class="info-box">
+    <h4>🚀 Starting GGUF Model Download</h4>
+    <p>Preparing to download model components...</p>
+</div>
+"""
+        
         if model_name in GGUF_IMAGE_MODELS:
             config = GGUF_IMAGE_MODELS[model_name]
             model_path = self.model_manager.models_dir / "gguf" / model_name
@@ -126,9 +135,18 @@ class Hunyuan3DStudio:
                 shutil.rmtree(model_path)
                 if progress:
                     progress(0.05, desc="Removed existing model for re-download...")
+                yield """
+<div class="info-box">
+    <h4>🗑️ Cleaned Up</h4>
+    <p>Removed existing model for fresh download...</p>
+</div>
+"""
             
-            return self.model_manager._load_gguf_model(model_path, config, "cuda", None, progress)[0]
-        return f"❌ Unknown GGUF model: {model_name}"
+            # Delegate to model manager's GGUF download method
+            # We'll create a generator version of this
+            yield from self.model_manager.download_gguf_model(model_name, force_redownload, progress)
+        else:
+            yield f"❌ Unknown GGUF model: {model_name}"
     
     def download_component(self, component_name, progress):
         """Download a FLUX component (VAE, text encoder)"""
@@ -171,16 +189,79 @@ class Hunyuan3DStudio:
         import shutil
         
         try:
+            models_deleted = []
+            
             if model_type == "image":
+                # Get model config to find repo_id
+                from .config import ALL_IMAGE_MODELS
+                model_config = ALL_IMAGE_MODELS.get(model_name, {})
+                repo_id = model_config.get("repo_id", "")
+                
+                # Check standard directory structure first
                 model_path = self.model_manager.models_dir / "image" / model_name
+                
+                # For FLUX models, also check src directory if not found in cache
+                if not model_path.exists() and model_name.startswith("FLUX"):
+                    model_path = self.model_manager.src_models_dir / "image" / model_name
+                
+                if model_path.exists():
+                    shutil.rmtree(model_path)
+                    models_deleted.append(str(model_path))
+                
+                # Also check for HuggingFace cache directory structure
+                # When using cache_dir with snapshot_download, HF creates:
+                # cache_dir/models--{org}--{model}/snapshots/{hash}/
+                if repo_id:
+                    # Convert repo_id (e.g., "black-forest-labs/FLUX.1-schnell") 
+                    # to HF cache format (e.g., "models--black-forest-labs--FLUX.1-schnell")
+                    hf_cache_name = f"models--{repo_id.replace('/', '--')}"
+                    
+                    # Check in the image model cache directory
+                    hf_cache_path = self.model_manager.models_dir / "image" / model_name / hf_cache_name
+                    if hf_cache_path.exists():
+                        shutil.rmtree(hf_cache_path)
+                        models_deleted.append(str(hf_cache_path))
+                    
+                    # Also check if the entire model directory contains only HF cache
+                    parent_path = self.model_manager.models_dir / "image" / model_name
+                    if parent_path.exists():
+                        # Check if it only contains HF cache directories
+                        subdirs = [d for d in parent_path.iterdir() if d.is_dir()]
+                        if all(d.name.startswith("models--") for d in subdirs):
+                            shutil.rmtree(parent_path)
+                            models_deleted.append(str(parent_path))
+                            
             elif model_type == "3d":
+                # Get model config to find repo_id
+                from .config import HUNYUAN3D_MODELS
+                model_config = HUNYUAN3D_MODELS.get(model_name, {})
+                repo_id = model_config.get("repo_id", "")
+                
                 model_path = self.model_manager.models_dir / "3d" / model_name
+                if model_path.exists():
+                    shutil.rmtree(model_path)
+                    models_deleted.append(str(model_path))
+                
+                # Also check for HuggingFace cache directory structure
+                if repo_id:
+                    hf_cache_name = f"models--{repo_id.replace('/', '--')}"
+                    hf_cache_path = self.model_manager.models_dir / "3d" / model_name / hf_cache_name
+                    if hf_cache_path.exists():
+                        shutil.rmtree(hf_cache_path)
+                        models_deleted.append(str(hf_cache_path))
+                    
+                    # Also check if the entire model directory contains only HF cache
+                    parent_path = self.model_manager.models_dir / "3d" / model_name
+                    if parent_path.exists():
+                        subdirs = [d for d in parent_path.iterdir() if d.is_dir()]
+                        if all(d.name.startswith("models--") for d in subdirs):
+                            shutil.rmtree(parent_path)
+                            models_deleted.append(str(parent_path))
             else:
                 return f"❌ Unknown model type: {model_type}"
             
-            if model_path.exists():
-                shutil.rmtree(model_path)
-                return f"✅ Successfully deleted {model_name}"
+            if models_deleted:
+                return f"✅ Successfully deleted {model_name} from:\n" + "\n".join(f"  • {path}" for path in models_deleted)
             else:
                 return f"❌ Model {model_name} not found"
                 
@@ -190,18 +271,123 @@ class Hunyuan3DStudio:
     def delete_gguf_model(self, model_name):
         """Delete a GGUF model and optionally its components"""
         import shutil
+        from .config import GGUF_IMAGE_MODELS
         
         try:
-            # Delete GGUF model directory
+            deleted_items = []
+            
+            # Delete standard GGUF model directory
             gguf_path = self.model_manager.models_dir / "gguf" / model_name
             if gguf_path.exists():
                 shutil.rmtree(gguf_path)
+                deleted_items.append(f"standard directory: {gguf_path}")
+            
+            # Also check for HuggingFace cache structure
+            if model_name in GGUF_IMAGE_MODELS:
+                config = GGUF_IMAGE_MODELS[model_name]
+                repo_id = config.repo_id
                 
-            # Note: We don't auto-delete components since they might be used by other models
-            return f"✅ Successfully deleted GGUF model {model_name}. Components (VAE, text encoders) preserved for other models."
+                # Convert repo_id to HF cache format
+                hf_cache_name = f"models--{repo_id.replace('/', '--')}"
+                hf_cache_path = self.model_manager.models_dir / "gguf" / model_name / hf_cache_name
+                
+                if hf_cache_path.exists():
+                    shutil.rmtree(hf_cache_path)
+                    deleted_items.append(f"HF cache: {hf_cache_path}")
+            
+            if deleted_items:
+                return f"✅ Successfully deleted GGUF model {model_name} ({', '.join(deleted_items)}). Components (VAE, text encoders) preserved for other models."
+            else:
+                return f"❌ GGUF model {model_name} not found"
                 
         except Exception as e:
             return f"❌ Failed to delete GGUF model {model_name}: {str(e)}"
+    
+    def cleanup_orphaned_caches(self):
+        """Clean up orphaned cache files from old directory structures"""
+        import shutil
+        import os
+        
+        cleanup_results = []
+        total_freed_space = 0
+        
+        try:
+            # Check for old HuggingFace cache in user home directory
+            hf_cache_home = Path.home() / ".cache" / "huggingface" / "hub"
+            if hf_cache_home.exists():
+                # Look for models that might be duplicated in our local cache
+                for item in hf_cache_home.iterdir():
+                    if item.is_dir() and item.name.startswith("models--"):
+                        # Check if this model exists in our local cache
+                        model_name_parts = item.name.replace("models--", "").split("--")
+                        if len(model_name_parts) >= 2:
+                            # Check if we have this model locally
+                            for model_type in ["image", "3d", "gguf"]:
+                                local_paths = []
+                                
+                                # Check various possible local paths
+                                if model_type == "image":
+                                    # Check for FLUX models
+                                    if "FLUX" in item.name or "flux" in item.name:
+                                        for flux_name in ["FLUX.1-dev", "FLUX.1-schnell"]:
+                                            local_paths.append(self.model_manager.models_dir / model_type / flux_name)
+                                            local_paths.append(self.model_manager.src_models_dir / model_type / flux_name)
+                                
+                                # Check if any local path exists with HF cache structure
+                                for local_path in local_paths:
+                                    hf_cache_local = local_path / item.name
+                                    if hf_cache_local.exists():
+                                        # We have this model locally, safe to suggest cleanup
+                                        size = sum(f.stat().st_size for f in item.rglob('*') if f.is_file())
+                                        size_gb = size / (1024**3)
+                                        cleanup_results.append({
+                                            "path": str(item),
+                                            "size_gb": size_gb,
+                                            "reason": "Duplicate in HuggingFace cache (model exists locally)"
+                                        })
+                                        total_freed_space += size_gb
+                                        break
+            
+            # Check for orphaned src/models directory
+            src_models_path = Path(__file__).parent / "models"
+            if src_models_path.exists():
+                # Check if any models exist here that also exist in cache
+                for model_type in ["image", "3d"]:
+                    type_path = src_models_path / model_type
+                    if type_path.exists():
+                        for model_dir in type_path.iterdir():
+                            if model_dir.is_dir():
+                                # Check if this model exists in cache
+                                cache_path = self.model_manager.models_dir / model_type / model_dir.name
+                                if cache_path.exists() or (cache_path.parent / f"models--{model_dir.name.replace('/', '--')}").exists():
+                                    size = sum(f.stat().st_size for f in model_dir.rglob('*') if f.is_file())
+                                    size_gb = size / (1024**3)
+                                    cleanup_results.append({
+                                        "path": str(model_dir),
+                                        "size_gb": size_gb,
+                                        "reason": "Duplicate in src/models (model exists in cache)"
+                                    })
+                                    total_freed_space += size_gb
+            
+            if cleanup_results:
+                result_text = f"<div class='info-box'><h4>🧹 Found {len(cleanup_results)} orphaned items</h4>"
+                result_text += f"<p>Total space that can be freed: {total_freed_space:.2f} GB</p>"
+                result_text += "<p>Orphaned items found:</p><ul>"
+                
+                for item in cleanup_results:
+                    result_text += f"<li>{item['path']} ({item['size_gb']:.2f} GB) - {item['reason']}</li>"
+                
+                result_text += "</ul>"
+                result_text += "<p><strong>Note:</strong> These are duplicate files that exist in multiple locations. "
+                result_text += "You can safely delete them from the HuggingFace cache or src/models directories if the models are working correctly from the cache/models directory.</p>"
+                result_text += "</div>"
+                
+                return result_text
+            else:
+                return "<div class='success-box'><h4>✅ No orphaned cache files found</h4><p>Your model directories are clean!</p></div>"
+                
+        except Exception as e:
+            return f"<div class='error-box'><h4>❌ Error during cleanup scan</h4><p>{str(e)}</p></div>"
     
     def delete_component(self, component_name):
         """Delete a FLUX component"""
@@ -244,14 +430,17 @@ class Hunyuan3DStudio:
             # First check in cache directory
             model_path_cache = self.model_manager.models_dir / "image" / name
             is_downloaded = self.model_manager.check_model_complete(model_path_cache, "image", name)
+            logger.debug(f"Checking {name}: cache path {model_path_cache}, downloaded: {is_downloaded}")
 
             # For FLUX models, also check in src directory if not found in cache
             if not is_downloaded and name.startswith("FLUX"):
                 model_path_src = self.model_manager.src_models_dir / "image" / name
                 is_downloaded = self.model_manager.check_model_complete(model_path_src, "image", name)
+                logger.debug(f"Checking {name}: src path {model_path_src}, downloaded: {is_downloaded}")
 
             if is_downloaded:
                 downloaded_image_models.append(name)
+                logger.info(f"Model {name} is downloaded")
 
         # Check which 3D models are downloaded
         for name in hunyuan_model_choices:
@@ -274,13 +463,6 @@ class Hunyuan3DStudio:
         if downloaded_image_models:
             default_image_model = downloaded_image_models[0]
 
-        # Always make the dropdown interactive
-        image_model_update = gr.update(
-            choices=image_model_choices_with_status,
-            value=default_image_model,
-            interactive=True
-        )
-
         # For 3D models - show all models but mark non-downloaded ones
         hunyuan_model_choices_with_status = []
         for name in hunyuan_model_choices:
@@ -294,18 +476,13 @@ class Hunyuan3DStudio:
         if downloaded_hunyuan_models:
             default_hunyuan_model = downloaded_hunyuan_models[0]
 
-        # Always make the dropdown interactive
-        hunyuan_model_update = gr.update(
-            choices=hunyuan_model_choices_with_status,
-            value=default_hunyuan_model,
-            interactive=True
+        # Return simple values instead of gr.update objects to avoid schema issues
+        return (
+            image_model_choices_with_status,
+            hunyuan_model_choices_with_status,
+            image_model_choices_with_status,
+            hunyuan_model_choices_with_status
         )
-
-        # For manual pipeline dropdowns (same updates)
-        manual_img_model_update = image_model_update
-        manual_3d_model_update = hunyuan_model_update
-
-        return image_model_update, hunyuan_model_update, manual_img_model_update, manual_3d_model_update
 
 
 

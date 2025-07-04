@@ -13,6 +13,7 @@ from transformers import pipeline
 
 from .performance_monitor import get_performance_monitor, profile_generation
 from .memory_manager import get_memory_manager
+from .gguf_manager import GGUFModelManager, GGUFModelInfo
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ class ImageGenerator:
         self.output_dir = output_dir
         self.background_remover = None
         self.stop_generation_flag = False
+        self.gguf_manager = GGUFModelManager(cache_dir="models/gguf")
 
     def stop_generation(self):
         """Stop the current generation process"""
@@ -97,6 +99,11 @@ class ImageGenerator:
         def generate_in_background():
             start_time = time.time()
             try:
+                # Check if this is a GGUF model
+                if hasattr(image_model, '_is_gguf_model') and image_model._is_gguf_model:
+                    logger.info(f"Using GGUF model for generation: {image_model_name}")
+                    # GGUF models are already properly configured through the pipeline
+                
                 # Acquire lock to ensure thread safety
                 with generation_lock:
                     # Create generator with seed

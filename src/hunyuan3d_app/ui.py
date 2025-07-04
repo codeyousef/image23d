@@ -4,11 +4,36 @@ from pathlib import Path
 from .hunyuan3d_studio import Hunyuan3DStudio
 from .config import ALL_IMAGE_MODELS, HUNYUAN3D_MODELS, QUALITY_PRESETS, IMAGE_MODELS, GATED_IMAGE_MODELS, GGUF_IMAGE_MODELS
 
+def update_model_dropdowns_helper(choices):
+    """Helper function to safely convert model choices to gr.update objects"""
+    try:
+        return [
+            gr.update(choices=choices[0]),
+            gr.update(choices=choices[1]),
+            gr.update(choices=choices[2]),
+            gr.update(choices=choices[3])
+        ]
+    except Exception as e:
+        print(f"Error updating model dropdowns: {e}")
+        return [
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update()
+        ]
+
 def load_custom_css():
-    css_path = Path("app_styles.css")
-    if css_path.exists():
-        with open(css_path, 'r') as f:
-            return f.read()
+    # Use minimal CSS to avoid breaking dropdowns
+    possible_paths = [
+        Path("app_styles_minimal.css"),
+        Path("src/app_styles_minimal.css"),
+        Path(__file__).parent.parent / "app_styles_minimal.css"
+    ]
+    
+    for css_path in possible_paths:
+        if css_path.exists():
+            with open(css_path, 'r') as f:
+                return f.read()
     return ""
 
 def create_interface(app: Hunyuan3DStudio):
@@ -16,10 +41,10 @@ def create_interface(app: Hunyuan3DStudio):
 
     with gr.Blocks(
             title="Hunyuan3D Studio - Complete Pipeline",
-            theme=gr.themes.Base(
-                primary_hue="sky",
-                secondary_hue="indigo",
-                font=gr.themes.GoogleFont("Inter")
+            theme=gr.themes.Soft(
+                primary_hue="blue",
+                secondary_hue="slate",
+                neutral_hue="slate"
             ),
             css=custom_css
     ) as interface:
@@ -34,19 +59,21 @@ def create_interface(app: Hunyuan3DStudio):
         model_status = gr.HTML(value=app.get_model_status())
 
         # Declare manual_img_model and manual_3d_model at a higher scope
-        initial_image_dropdown_update, initial_hunyuan_dropdown_update, _, _ = app.get_model_selection_data()
+        initial_image_choices, initial_hunyuan_choices, _, _ = app.get_model_selection_data()
 
         manual_img_model = gr.Dropdown(
-            choices=initial_image_dropdown_update['choices'],
+            choices=initial_image_choices,
             label="Model",
-            value=initial_image_dropdown_update['value'],
-            visible=False # Initially hidden, will be shown in Manual Pipeline tab
+            value=initial_image_choices[0] if initial_image_choices else None,
+            visible=False, # Initially hidden, will be shown in Manual Pipeline tab
+            interactive=True
         )
         manual_3d_model = gr.Dropdown(
-            choices=initial_hunyuan_dropdown_update['choices'],
+            choices=initial_hunyuan_choices,
             label="Model",
-            value=initial_hunyuan_dropdown_update['value'],
-            visible=False # Initially hidden, will be shown in Manual Pipeline tab
+            value=initial_hunyuan_choices[0] if initial_hunyuan_choices else None,
+            visible=False, # Initially hidden, will be shown in Manual Pipeline tab
+            interactive=True
         )
 
         with gr.Tabs():
@@ -77,15 +104,47 @@ def create_interface(app: Hunyuan3DStudio):
                         with gr.Group():
                             with gr.Row():
                                 image_model = gr.Dropdown(
-                                    choices=initial_image_dropdown_update['choices'],
-                                    value=initial_image_dropdown_update['value'],
-                                    label="Image Model"
+                                    choices=initial_image_choices,
+                                    value=initial_image_choices[0] if initial_image_choices else None,
+                                    label="Image Model",
+                                    interactive=True
                                 )
                                 hunyuan_model = gr.Dropdown(
-                                    choices=initial_hunyuan_dropdown_update['choices'],
-                                    value=initial_hunyuan_dropdown_update['value'],
-                                    label="3D Model"
+                                    choices=initial_hunyuan_choices,
+                                    value=initial_hunyuan_choices[0] if initial_hunyuan_choices else None,
+                                    label="3D Model",
+                                    interactive=True
                                 )
+                            
+                            # GGUF Model Info
+                            gguf_info = gr.Markdown(visible=False)
+                            
+                            # Function to show GGUF info when GGUF model is selected
+                            def update_gguf_info(model_name):
+                                if model_name and model_name in GGUF_IMAGE_MODELS:
+                                    config = GGUF_IMAGE_MODELS[model_name]
+                                    info_text = f"""
+<div class="info-box">
+    <h4>⚡ GGUF Model Selected</h4>
+    <p><strong>{config.name}</strong></p>
+    <ul>
+        <li>🎯 Quantization will be auto-selected based on available VRAM</li>
+        <li>💾 Memory Usage: {config.vram_required}</li>
+        <li>📊 Quality: Near-identical to full precision</li>
+        <li>🚀 Performance: Faster inference with lower memory</li>
+    </ul>
+</div>
+"""
+                                    return gr.update(value=info_text, visible=True)
+                                else:
+                                    return gr.update(visible=False)
+                            
+                            # Connect model selection to GGUF info update
+                            image_model.change(
+                                fn=update_gguf_info,
+                                inputs=[image_model],
+                                outputs=[gguf_info]
+                            )
 
                             quality_preset = gr.Radio(
                                 choices=list(QUALITY_PRESETS.keys()),
@@ -176,8 +235,8 @@ def create_interface(app: Hunyuan3DStudio):
                     ),
                     outputs=[generate_btn, stop_btn]
                 ).then(
-                    # Then run the actual generation
-                    fn=app.full_pipeline,
+                    # Then run the actual generation with wrapped function for progress
+                    fn=lambda *args: app.full_pipeline(*args, progress=gr.Progress()),
                     inputs=[
                         prompt, negative_prompt, image_model,
                         image_width, image_height, image_seed,
@@ -192,7 +251,7 @@ def create_interface(app: Hunyuan3DStudio):
                     outputs=[model_status]
                 ).then(
                     # Update model selection dropdowns
-                    fn=app.model_manager.get_model_selection_data,
+                    fn=lambda: update_model_dropdowns_helper(app.get_model_selection_data()),
                     outputs=[image_model, hunyuan_model, manual_img_model, manual_3d_model]
                 ).then(
                     # Finally, restore the UI state
@@ -267,12 +326,31 @@ def create_interface(app: Hunyuan3DStudio):
                                     outputs=[status_html]
                                 )
                                 
+                                def update_model_dropdowns():
+                                    """Wrapper function to safely update model dropdowns after deletion"""
+                                    try:
+                                        choices = app.get_model_selection_data()
+                                        return [
+                                            gr.update(choices=choices[0]),
+                                            gr.update(choices=choices[1]),
+                                            gr.update(choices=choices[2]),
+                                            gr.update(choices=choices[3])
+                                        ]
+                                    except Exception as e:
+                                        print(f"Error updating model dropdowns: {e}")
+                                        return [
+                                            gr.update(),
+                                            gr.update(), 
+                                            gr.update(),
+                                            gr.update()
+                                        ]
+
                                 delete_img_btn.click(
                                     fn=create_delete_fn(name),
                                     outputs=[status_html]
                                 ).then(
                                     # Update model selection dropdowns after deletion
-                                    fn=app.get_model_selection_data,
+                                    fn=update_model_dropdowns,
                                     outputs=[image_model, hunyuan_model, manual_img_model, manual_3d_model]
                                 )
 
@@ -318,7 +396,7 @@ def create_interface(app: Hunyuan3DStudio):
                                     outputs=[gated_status]
                                 ).then(
                                     # Update model selection dropdowns after deletion
-                                    fn=app.get_model_selection_data,
+                                    fn=lambda: update_model_dropdowns_helper(app.get_model_selection_data()),
                                     outputs=[image_model, hunyuan_model, manual_img_model, manual_3d_model]
                                 )
 
@@ -333,25 +411,69 @@ def create_interface(app: Hunyuan3DStudio):
                                 gr.Markdown(f"Size: {config.size} | VRAM: {config.vram_required}")
 
                                 with gr.Row():
-                                    download_gguf_btn = gr.Button(f"Download {name}", size="sm", variant="secondary")
+                                    # Check if model is already downloaded
+                                    is_downloaded = app.model_manager.check_gguf_model_complete(name)
+                                    
+                                    download_gguf_btn = gr.Button(
+                                        f"{'✅ Downloaded' if is_downloaded else f'Download {name}'}", 
+                                        size="sm", 
+                                        variant="secondary",
+                                        interactive=not is_downloaded  # Disable if already downloaded
+                                    )
                                     stop_gguf_btn = gr.Button("Stop", size="sm", variant="stop")
-                                    delete_gguf_btn = gr.Button("Delete", size="sm", variant="stop")
+                                    delete_gguf_btn = gr.Button(
+                                        "Delete", 
+                                        size="sm", 
+                                        variant="stop",
+                                        visible=is_downloaded  # Only show delete button if model is downloaded
+                                    )
                                     force_redownload_gguf = gr.Checkbox(label="Force re-download", value=False)
 
                                 gguf_status = gr.HTML()
 
                                 def create_gguf_download_fn(model_name):
-                                    def download_fn(force):
-                                        return app.download_gguf_model(model_name, force, None)
+                                    def download_fn(force, progress=gr.Progress()):
+                                        yield from app.download_gguf_model(model_name, force, progress)
                                     return download_fn
                                 
                                 def create_gguf_delete_fn(model_name):
                                     return lambda: app.delete_gguf_model(model_name)
 
+                                # Function to update button states based on checkbox
+                                def create_update_gguf_button_fn(model_name):
+                                    def update_fn(force_redownload):
+                                        is_downloaded = app.model_manager.check_gguf_model_complete(model_name)
+                                        if is_downloaded and not force_redownload:
+                                            download_btn = gr.update(value="✅ Downloaded", interactive=False)
+                                        else:
+                                            download_btn = gr.update(value=f"Download {model_name}", interactive=True)
+                                        # Delete button visible only if downloaded
+                                        delete_btn = gr.update(visible=is_downloaded)
+                                        return download_btn, delete_btn
+                                    return update_fn
+
+                                # Connect checkbox to button states
+                                force_redownload_gguf.change(
+                                    fn=create_update_gguf_button_fn(name),
+                                    inputs=[force_redownload_gguf],
+                                    outputs=[download_gguf_btn, delete_gguf_btn]
+                                )
+
                                 download_gguf_btn.click(
                                     fn=create_gguf_download_fn(name),
                                     inputs=[force_redownload_gguf],
-                                    outputs=[gguf_status]
+                                    outputs=[gguf_status, image_model, hunyuan_model, manual_img_model, manual_3d_model]
+                                ).then(
+                                    # Update button states after download completes
+                                    fn=lambda: [
+                                        gr.update(value="✅ Downloaded", interactive=False),
+                                        gr.update(visible=True)  # Show delete button
+                                    ],
+                                    outputs=[download_gguf_btn, delete_gguf_btn]
+                                ).then(
+                                    # Reset force redownload checkbox
+                                    fn=lambda: False,
+                                    outputs=[force_redownload_gguf]
                                 )
 
                                 stop_gguf_btn.click(
@@ -363,8 +485,15 @@ def create_interface(app: Hunyuan3DStudio):
                                     fn=create_gguf_delete_fn(name),
                                     outputs=[gguf_status]
                                 ).then(
+                                    # Update button states after deletion
+                                    fn=lambda model_name=name: [
+                                        gr.update(value=f"Download {model_name}", interactive=True),
+                                        gr.update(visible=False)  # Hide delete button
+                                    ],
+                                    outputs=[download_gguf_btn, delete_gguf_btn]
+                                ).then(
                                     # Update model selection dropdowns after deletion
-                                    fn=app.get_model_selection_data,
+                                    fn=lambda: update_model_dropdowns_helper(app.get_model_selection_data()),
                                     outputs=[image_model, hunyuan_model, manual_img_model, manual_3d_model]
                                 )
 
@@ -410,7 +539,7 @@ def create_interface(app: Hunyuan3DStudio):
                                     outputs=[status_3d]
                                 ).then(
                                     # Update model selection dropdowns after deletion
-                                    fn=app.get_model_selection_data,
+                                    fn=lambda: update_model_dropdowns_helper(app.get_model_selection_data()),
                                     outputs=[image_model, hunyuan_model, manual_img_model, manual_3d_model]
                                 )
 
@@ -489,7 +618,7 @@ def create_interface(app: Hunyuan3DStudio):
 
                         # Create a dropdown for model selection
                         missing_components_model = gr.Dropdown(
-                            choices=list(IMAGE_MODELS.keys()) + list(GATED_IMAGE_MODELS.keys()),  # Initial choices for "image" type
+                            choices=list(ALL_IMAGE_MODELS.keys()),  # Initial choices for "image" type - includes all image models
                             label="Select Model",
                             interactive=True
                         )
@@ -505,7 +634,7 @@ def create_interface(app: Hunyuan3DStudio):
                     # Function to update model choices based on type
                     def update_model_choices(model_type):
                         if model_type == "image":
-                            choices = list(IMAGE_MODELS.keys()) + list(GATED_IMAGE_MODELS.keys())
+                            choices = list(ALL_IMAGE_MODELS.keys())  # Use ALL_IMAGE_MODELS to include GGUF models
                         else:
                             choices = list(HUNYUAN3D_MODELS.keys())
                         return gr.update(choices=choices, value=choices[0] if choices else None)
@@ -574,6 +703,21 @@ def create_interface(app: Hunyuan3DStudio):
                         outputs=[missing_components_status]
                     )
 
+                # Cache Cleanup Section
+                with gr.Group():
+                    gr.Markdown("### 🧹 Cache Cleanup")
+                    gr.Markdown("Scan for orphaned cache files from old directory structures that can be safely removed.")
+                    
+                    with gr.Row():
+                        scan_cache_btn = gr.Button("🔍 Scan for Orphaned Files", variant="secondary")
+                        cleanup_status = gr.HTML()
+                    
+                    # Connect the scan button
+                    scan_cache_btn.click(
+                        fn=app.cleanup_orphaned_caches,
+                        outputs=[cleanup_status]
+                    )
+
             # Manual Pipeline Tab
             with gr.Tab("🎛️ Manual Pipeline"):
                 gr.Markdown("""
@@ -595,7 +739,8 @@ def create_interface(app: Hunyuan3DStudio):
                                     choices=list(ALL_IMAGE_MODELS.keys()),
                                     label="Model",
                                     value="SDXL-Turbo",
-                                    visible=True # Make it visible here
+                                    visible=True, # Make it visible here
+                                    interactive=True
                                 )
                                 manual_img_steps = gr.Slider(10, 100, 35, label="Steps")
 
@@ -622,7 +767,8 @@ def create_interface(app: Hunyuan3DStudio):
                                     choices=list(HUNYUAN3D_MODELS.keys()),
                                     label="Model",
                                     value="hunyuan3d-2mini",
-                                    visible=True # Make it visible here
+                                    visible=True, # Make it visible here
+                                    interactive=True
                                 )
 
                             with gr.Row():
