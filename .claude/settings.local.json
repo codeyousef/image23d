@@ -9,7 +9,19 @@
       "Bash(timeout:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(mv:*)"
+      "Bash(mv:*)",
+      "Bash(uv pip:*)",
+      "Bash(uv venv:*)",
+      "Bash(rm:*)",
+      "Bash(find:*)",
+      "Bash(pip show:*)",
+      "Bash(lsof:*)",
+      "Bash(kill:*)",
+      "Bash(chmod:*)",
+      "Bash(ls:*)",
+      "Bash(git reset:*)",
+      "Bash(git restore:*)",
+      "Bash(true)"
     ],
     "deny": []
   }
