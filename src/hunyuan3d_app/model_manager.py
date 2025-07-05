@@ -1213,6 +1213,17 @@ class ModelManager:
             def download_thread():
                 nonlocal download_complete, download_error
                 try:
+                    # Enable hf_transfer for faster downloads
+                    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+                    
+                    # Try to import hf_transfer
+                    try:
+                        import hf_transfer
+                        logger.info("Using hf_transfer for accelerated downloads")
+                    except ImportError:
+                        logger.warning("hf_transfer not installed - downloads will be slower")
+                        logger.warning("Install with: pip install hf_transfer")
+                    
                     std_capture = StdCapture(progress_info)
                     old_stdout = sys.stdout
                     old_stderr = sys.stderr

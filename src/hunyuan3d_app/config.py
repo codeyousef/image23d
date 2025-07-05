@@ -184,9 +184,9 @@ HUNYUAN3D_MODELS = {
     "hunyuan3d-2standard": {
         "name": "Hunyuan3D 2.0 Standard",
         "repo_id": "tencent/Hunyuan3D-2",
-        "size": "~25 GB",
+        "size": "~110 GB",  # Actual size based on user experience
         "vram_required": "16GB+",
-        "description": "Balanced model for high-quality results",
+        "description": "Balanced model for high-quality results (very large download)",
         "optimal_views": 8
     }
 }
