@@ -109,44 +109,131 @@ IMAGE_MODELS = {
         supports_refiner=False
     )
 }
-# GGUF Models - Memory optimized versions
+# GGUF Models - Complete quantization spectrum
 GGUF_IMAGE_MODELS = {
+    # FLUX.1-dev quantized models
     "FLUX.1-dev-Q8": ImageModelConfig(
-        name="FLUX.1-dev Q8 GGUF (Memory Optimized)",
+        name="FLUX.1-dev Q8 GGUF (Best Quality)",
         repo_id="city96/FLUX.1-dev-gguf",
         pipeline_class="FluxPipeline",
         size="~12.5 GB",
         vram_required="14GB+",
-        description="Memory-optimized FLUX.1-dev with 8-bit quantization - 50% less VRAM",
+        description="Highest quality GGUF - 98% of original quality, 50% less VRAM",
         optimal_resolution=(1024, 1024),
         supports_refiner=False,
         is_gguf=True,
         gguf_file="flux1-dev-Q8_0.gguf"
     ),
     "FLUX.1-dev-Q6": ImageModelConfig(
-        name="FLUX.1-dev Q6 GGUF (Ultra Memory Optimized)",
+        name="FLUX.1-dev Q6_K GGUF (Balanced)",
         repo_id="city96/FLUX.1-dev-gguf",
         pipeline_class="FluxPipeline",
-        size="~10 GB",
-        vram_required="12GB+",
-        description="Ultra memory-optimized FLUX.1-dev with 6-bit quantization - 60% less VRAM",
+        size="~9.8 GB",
+        vram_required="11.5GB+",
+        description="Great balance - 96% quality, 60% less VRAM",
         optimal_resolution=(1024, 1024),
         supports_refiner=False,
         is_gguf=True,
         gguf_file="flux1-dev-Q6_K.gguf"
     ),
+    "FLUX.1-dev-Q5": ImageModelConfig(
+        name="FLUX.1-dev Q5_K_M GGUF (Efficient)",
+        repo_id="city96/FLUX.1-dev-gguf",
+        pipeline_class="FluxPipeline",
+        size="~8.5 GB",
+        vram_required="10.5GB+",
+        description="Good quality - 95% quality, 65% less VRAM",
+        optimal_resolution=(1024, 1024),
+        supports_refiner=False,
+        is_gguf=True,
+        gguf_file="flux1-dev-Q5_K_M.gguf"
+    ),
+    "FLUX.1-dev-Q4": ImageModelConfig(
+        name="FLUX.1-dev Q4_K_S GGUF (Memory Saver)",
+        repo_id="city96/FLUX.1-dev-gguf",
+        pipeline_class="FluxPipeline",
+        size="~6.5 GB",
+        vram_required="8GB+",
+        description="Memory efficient - 90% quality, 70% less VRAM",
+        optimal_resolution=(1024, 1024),
+        supports_refiner=False,
+        is_gguf=True,
+        gguf_file="flux1-dev-Q4_K_S.gguf"
+    ),
+    "FLUX.1-dev-Q3": ImageModelConfig(
+        name="FLUX.1-dev Q3_K_M GGUF (Low VRAM)",
+        repo_id="city96/FLUX.1-dev-gguf",
+        pipeline_class="FluxPipeline",
+        size="~5.0 GB",
+        vram_required="6.5GB+",
+        description="Low VRAM - 82% quality, works on 8GB GPUs",
+        optimal_resolution=(1024, 1024),
+        supports_refiner=False,
+        is_gguf=True,
+        gguf_file="flux1-dev-Q3_K_M.gguf"
+    ),
+    "FLUX.1-dev-Q2": ImageModelConfig(
+        name="FLUX.1-dev Q2_K GGUF (Ultra Low VRAM)",
+        repo_id="city96/FLUX.1-dev-gguf",
+        pipeline_class="FluxPipeline",
+        size="~3.5 GB",
+        vram_required="5GB+",
+        description="Extreme compression - 70% quality, works on 6GB GPUs",
+        optimal_resolution=(1024, 1024),
+        supports_refiner=False,
+        is_gguf=True,
+        gguf_file="flux1-dev-Q2_K.gguf"
+    ),
+    # FLUX.1-schnell quantized models
     "FLUX.1-schnell-Q8": ImageModelConfig(
-        name="FLUX.1-schnell Q8 GGUF (Fast + Memory Optimized)",
+        name="FLUX.1-schnell Q8 GGUF (Fast + Quality)",
         repo_id="city96/FLUX.1-schnell-gguf",
         pipeline_class="FluxPipeline",
         size="~12.5 GB",
         vram_required="14GB+",
-        description="Fast FLUX.1-schnell with 8-bit quantization - 50% less VRAM, 4x faster",
+        description="Fast generation with best GGUF quality - 4x faster than dev",
         optimal_resolution=(1024, 1024),
         supports_refiner=False,
         is_gguf=True,
         gguf_file="flux1-schnell-Q8_0.gguf"
-    )
+    ),
+    "FLUX.1-schnell-Q6": ImageModelConfig(
+        name="FLUX.1-schnell Q6_K GGUF (Fast + Efficient)",
+        repo_id="city96/FLUX.1-schnell-gguf",
+        pipeline_class="FluxPipeline",
+        size="~9.8 GB",
+        vram_required="11.5GB+",
+        description="Fast with good efficiency - great for quick iterations",
+        optimal_resolution=(1024, 1024),
+        supports_refiner=False,
+        is_gguf=True,
+        gguf_file="flux1-schnell-Q6_K.gguf"
+    ),
+    "FLUX.1-schnell-Q4": ImageModelConfig(
+        name="FLUX.1-schnell Q4_K_S GGUF (Fastest)",
+        repo_id="city96/FLUX.1-schnell-gguf",
+        pipeline_class="FluxPipeline",
+        size="~6.5 GB",
+        vram_required="8GB+",
+        description="Ultra-fast generation on low VRAM - ideal for prototyping",
+        optimal_resolution=(1024, 1024),
+        supports_refiner=False,
+        is_gguf=True,
+        gguf_file="flux1-schnell-Q4_K_S.gguf"
+    ),
+    # FP8 optimized models
+    "FLUX.1-dev-FP8": ImageModelConfig(
+        name="FLUX.1-dev FP8 (Near-Lossless)",
+        repo_id="Kijai/flux-fp8",
+        pipeline_class="FluxPipeline",
+        size="~12 GB",
+        vram_required="14GB+",
+        description="FP8 quantization - 99% quality with 50% less VRAM than FP16",
+        optimal_resolution=(1024, 1024),
+        supports_refiner=False,
+        is_gguf=True,
+        gguf_file="flux1-dev-fp8-e4m3fn.safetensors"
+    ),
 }
 
 GATED_IMAGE_MODELS = {
@@ -173,20 +260,36 @@ GATED_IMAGE_MODELS = {
 }
 ALL_IMAGE_MODELS = {**IMAGE_MODELS, **GGUF_IMAGE_MODELS, **GATED_IMAGE_MODELS}
 HUNYUAN3D_MODELS = {
+    "hunyuan3d-21": {
+        "name": "Hunyuan3D 2.1 (Latest)",
+        "repo_id": "tencent/Hunyuan3D-2.1",
+        "size": "~30 GB",
+        "vram_required": "16GB+",
+        "description": "Latest model with PBR material synthesis - production ready",
+        "optimal_views": 8
+    },
     "hunyuan3d-2mini": {
         "name": "Hunyuan3D 2.0 Mini",
-        "repo_id": "tencent/Hunyuan3D-2",
-        "size": "~15 GB",
-        "vram_required": "12GB+",
-        "description": "Smaller, faster model suitable for quick previews",
+        "repo_id": "tencent/Hunyuan3D-2mini",
+        "size": "~8 GB",  # 0.6B model
+        "vram_required": "8GB+",
+        "description": "Smallest, fastest model (0.6B) - good for quick tests",
         "optimal_views": 6
     },
+    "hunyuan3d-2mv": {
+        "name": "Hunyuan3D 2.0 Multiview",
+        "repo_id": "tencent/Hunyuan3D-2mv",
+        "size": "~25 GB",
+        "vram_required": "12GB+",
+        "description": "Multiview controlled shape generation",
+        "optimal_views": 4
+    },
     "hunyuan3d-2standard": {
-        "name": "Hunyuan3D 2.0 Standard",
+        "name": "Hunyuan3D 2.0 Standard (Legacy)",
         "repo_id": "tencent/Hunyuan3D-2",
         "size": "~110 GB",  # Actual size based on user experience
         "vram_required": "16GB+",
-        "description": "Balanced model for high-quality results (very large download)",
+        "description": "Older large model - consider using 2.1 instead",
         "optimal_views": 8
     }
 }

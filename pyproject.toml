@@ -47,6 +47,11 @@ dependencies = [
     "pywin32>=228; platform_system == 'Windows'",  # For Windows-specific functionality
     "pynvml>=11.5.0",  # For NVIDIA GPU detection
     
+    # Security & API
+    "keyring>=24.0.0",  # Secure credential storage
+    "cryptography>=41.0.0",  # Encryption for fallback storage
+    "aiohttp>=3.9.0",  # Async HTTP for Civitai downloads
+    
     # Memory optimizations (include by default)
     "xformers>=0.0.28; platform_system == 'Windows'",  # Windows-compatible xformers
     "xformers>=0.0.22; platform_system == 'Linux'",    # Linux xformers

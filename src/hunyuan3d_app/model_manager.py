@@ -1059,7 +1059,7 @@ class ModelManager:
                 "repo_id": repo_id,
                 "cache_dir": str(save_path),  # Use cache_dir to download directly to our models directory
                 "force_download": force_redownload,  # Force fresh download if requested
-                "max_workers": 8, # Increase concurrent connections for faster downloads
+                "max_workers": 16, # Increase concurrent connections for faster downloads with hf_transfer
             }
 
             # Only add resume_download if not forcing redownload
@@ -1215,11 +1215,16 @@ class ModelManager:
                 try:
                     # Enable hf_transfer for faster downloads
                     os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+                    # Set higher concurrency for better speeds
+                    os.environ["HF_TRANSFER_CONCURRENCY"] = "16"  # Increase parallel connections
                     
                     # Try to import hf_transfer
                     try:
                         import hf_transfer
-                        logger.info("Using hf_transfer for accelerated downloads")
+                        logger.info(f"Using hf_transfer v{hf_transfer.__version__} for accelerated downloads")
+                        logger.info("Transfer concurrency set to 16 for maximum speed")
+                        # Add progress info
+                        progress_info.set_current_task("🚀 Using hf_transfer for accelerated downloads")
                     except ImportError:
                         logger.warning("hf_transfer not installed - downloads will be slower")
                         logger.warning("Install with: pip install hf_transfer")
