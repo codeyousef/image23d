@@ -78,6 +78,21 @@ def create_enhanced_interface(app):
             with gr.Tab("📋 Queue & History"):
                 create_queue_history_tab(app)
                 
+            # Video Generation Tab
+            with gr.Tab("🎬 Video Generation"):
+                from .ui_video_tab import create_video_generation_tab
+                create_video_generation_tab(app)
+                
+            # Character Studio Tab
+            with gr.Tab("👤 Character Studio"):
+                from .ui_character_tab import create_character_studio_tab
+                create_character_studio_tab(app)
+                
+            # Face Swap Tab
+            with gr.Tab("🔄 Face Swap"):
+                from .ui_faceswap_tab import create_face_swap_tab
+                create_face_swap_tab(app)
+                
             # Model Comparison Tab
             with gr.Tab("📊 Benchmarks"):
                 app.model_comparison.create_ui_component()
@@ -86,6 +101,10 @@ def create_enhanced_interface(app):
             with gr.Tab("⚙️ Settings"):
                 create_settings_tab(app)
                 
+        # Add real-time progress display
+        from .ui_progress_component import create_progress_component
+        progress_display = create_progress_component()
+        
         # Auto-refresh for stats
         def refresh_stats():
             stats = app.get_system_stats()
@@ -201,9 +220,30 @@ def create_advanced_pipeline_tab(app):
                     lora_2 = gr.Dropdown(choices=lora_choices, label="LoRA 2", value=None)
                     lora_2_weight = gr.Slider(0, 2, 1, step=0.1, label="LoRA 2 Weight")
                     
-            # Prompt
+            # Prompt with auto-suggestion
             prompt = gr.Textbox(label="Prompt", lines=3)
             negative_prompt = gr.Textbox(label="Negative Prompt", lines=2)
+            
+            # LoRA auto-suggestion
+            with gr.Group():
+                auto_suggest_loras = gr.Checkbox(
+                    label="🤖 Auto-suggest LoRAs based on prompt",
+                    value=True
+                )
+                
+                suggestion_status = gr.HTML(visible=False)
+                
+                with gr.Row(visible=False) as suggestion_row:
+                    suggested_loras = gr.CheckboxGroup(
+                        label="Suggested LoRAs",
+                        choices=[],
+                        value=[]
+                    )
+                    
+                    download_suggested_btn = gr.Button(
+                        "📥 Download Selected",
+                        size="sm"
+                    )
             
         with gr.Column():
             # Output

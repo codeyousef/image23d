@@ -1,10 +1,11 @@
-"""LoRA (Low-Rank Adaptation) model management and loading"""
+"""LoRA (Low-Rank Adaptation) model management and loading with intelligent suggestions"""
 
 import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any, Union
+import asyncio
 
 import torch
 from diffusers import StableDiffusionXLPipeline, FluxPipeline
@@ -39,11 +40,11 @@ class LoRAInfo:
 
 
 class LoRAManager:
-    """Manages LoRA loading, stacking, and application to pipelines"""
+    """Manages LoRA loading, stacking, and application to pipelines with intelligent suggestions"""
     
     SUPPORTED_FORMATS = [".safetensors", ".pt", ".bin", ".ckpt"]
     
-    def __init__(self, lora_dir: Path):
+    def __init__(self, lora_dir: Path, suggestion_engine: Optional[Any] = None):
         self.lora_dir = Path(lora_dir)
         self.lora_dir.mkdir(parents=True, exist_ok=True)
         
@@ -53,6 +54,9 @@ class LoRAManager:
         # Metadata cache
         self.metadata_file = self.lora_dir / "lora_metadata.json"
         self.metadata = self._load_metadata()
+        
+        # Suggestion engine integration
+        self.suggestion_engine = suggestion_engine
         
     def _load_metadata(self) -> Dict[str, Dict]:
         """Load LoRA metadata from cache"""
@@ -465,3 +469,152 @@ class LoRAManager:
             torch.cuda.empty_cache()
             
         logger.info("Cleared LoRA cache")
+    
+    async def suggest_loras_for_prompt(
+        self,
+        prompt: str,
+        negative_prompt: str = "",
+        base_model: str = "FLUX.1",
+        max_suggestions: int = 5,
+        auto_download: bool = False
+    ) -> List[Any]:
+        """Get LoRA suggestions for a prompt using the suggestion engine
+        
+        Args:
+            prompt: Generation prompt
+            negative_prompt: Negative prompt
+            base_model: Base model
+            max_suggestions: Maximum suggestions
+            auto_download: Automatically download suggested LoRAs
+            
+        Returns:
+            List of LoRA suggestions
+        """
+        if not self.suggestion_engine:
+            logger.warning("No suggestion engine configured")
+            return []
+            
+        try:
+            # Get suggestions
+            suggestions = await self.suggestion_engine.suggest_loras(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                base_model=base_model,
+                max_suggestions=max_suggestions
+            )
+            
+            # Check which ones are already downloaded
+            local_loras = {lora.name.lower() for lora in self.scan_lora_directory()}
+            
+            for suggestion in suggestions:
+                suggestion.is_downloaded = suggestion.name.lower() in local_loras
+                
+            # Auto-download if requested
+            if auto_download:
+                for suggestion in suggestions:
+                    if not suggestion.is_downloaded and suggestion.download_url:
+                        logger.info(f"Auto-downloading suggested LoRA: {suggestion.name}")
+                        # Download logic would go here
+                        
+            return suggestions
+            
+        except Exception as e:
+            logger.error(f"Error getting LoRA suggestions: {e}")
+            return []
+            
+    def apply_suggested_loras(
+        self,
+        pipeline: Union[StableDiffusionXLPipeline, FluxPipeline],
+        suggestions: List[Any],
+        accepted_indices: List[int]
+    ) -> str:
+        """Apply accepted LoRA suggestions to pipeline
+        
+        Args:
+            pipeline: Diffusion pipeline
+            suggestions: List of suggestions
+            accepted_indices: Indices of accepted suggestions
+            
+        Returns:
+            Updated prompt with trigger words
+        """
+        lora_configs = []
+        trigger_words = []
+        
+        for idx in accepted_indices:
+            if idx >= len(suggestions):
+                continue
+                
+            suggestion = suggestions[idx]
+            
+            # Find local LoRA file
+            local_lora = None
+            for lora in self.scan_lora_directory():
+                if lora.name.lower() == suggestion.name.lower():
+                    local_lora = lora
+                    break
+                    
+            if local_lora:
+                # Default weight or from suggestion
+                weight = getattr(suggestion, 'recommended_weight', 1.0)
+                lora_configs.append((local_lora, weight))
+                
+                # Collect trigger words
+                if suggestion.trigger_words:
+                    trigger_words.extend(suggestion.trigger_words)
+                    
+                # Record user action
+                if self.suggestion_engine:
+                    self.suggestion_engine.record_user_action(
+                        suggestion.lora_id,
+                        "accepted"
+                    )
+                    
+        # Apply LoRAs to pipeline
+        if lora_configs:
+            self.apply_multiple_loras(pipeline, lora_configs)
+            
+        # Return trigger words for prompt enhancement
+        return ", ".join(trigger_words) if trigger_words else ""
+        
+    def get_lora_preview_info(self, lora_path: Path) -> Dict[str, Any]:
+        """Get preview information for a LoRA
+        
+        Args:
+            lora_path: Path to LoRA file
+            
+        Returns:
+            Dictionary with preview info
+        """
+        try:
+            lora_info = self._extract_lora_info(lora_path)
+            if not lora_info:
+                return {}
+                
+            return {
+                "name": lora_info.name,
+                "base_model": lora_info.base_model,
+                "trigger_words": lora_info.trigger_words,
+                "description": lora_info.description,
+                "file_size_mb": lora_info.file_size_mb,
+                "compatible_models": self._get_compatible_models(lora_info),
+                "recommended_weight": lora_info.weight_default,
+                "weight_range": (lora_info.weight_min, lora_info.weight_max)
+            }
+        except Exception as e:
+            logger.error(f"Error getting LoRA preview: {e}")
+            return {}
+            
+    def _get_compatible_models(self, lora_info: LoRAInfo) -> List[str]:
+        """Get list of compatible models for a LoRA"""
+        compatible = []
+        
+        if lora_info.is_compatible_with_flux:
+            compatible.extend(["FLUX.1-dev", "FLUX.1-schnell"])
+        if lora_info.is_compatible_with_sdxl:
+            compatible.extend(["SDXL 1.0", "SDXL Turbo"])
+            
+        if lora_info.base_model == "SD1.5":
+            compatible.extend(["SD 1.5", "SD 1.4"])
+            
+        return compatible

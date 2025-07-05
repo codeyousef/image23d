@@ -52,6 +52,20 @@ dependencies = [
     "cryptography>=41.0.0",  # Encryption for fallback storage
     "aiohttp>=3.9.0",  # Async HTTP for Civitai downloads
     
+    # New advanced features
+    "websockets>=12.0",  # WebSocket server for real-time progress
+    "python-socketio>=5.10.0",  # Socket.IO support
+    "scikit-learn>=1.3.0",  # For NLP and clustering in LoRA suggestions
+    "clip-interrogator>=0.6.0",  # For image analysis in character consistency
+    "insightface>=0.7.0",  # Face swapping
+    "onnxruntime>=1.16.0",  # For InsightFace models
+    "aria2p>=0.11.0",  # Fast downloads for Civitai
+    
+    # Video generation placeholders (actual packages would be added when available)
+    # "ltx-video>=0.1.0",  # LTX-Video model
+    # "wan-video>=2.1.0",  # Wan 2.1 model
+    # "skyreels>=0.1.0",  # SkyReels model
+    
     # Memory optimizations (include by default)
     "xformers>=0.0.28; platform_system == 'Windows'",  # Windows-compatible xformers
     "xformers>=0.0.22; platform_system == 'Linux'",    # Linux xformers

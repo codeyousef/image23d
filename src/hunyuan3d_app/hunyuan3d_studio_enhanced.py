@@ -12,9 +12,14 @@ from .hunyuan3d_studio import Hunyuan3DStudio
 from .credential_manager import CredentialManager
 from .civitai_manager import CivitaiManager
 from .lora_manager import LoRAManager
+from .lora_suggestion import LoRASuggestionEngine
 from .queue_manager import QueueManager, JobPriority
 from .history_manager import HistoryManager
 from .model_comparison import ModelComparison
+from .video_generation import VideoGenerator
+from .character_consistency import CharacterConsistencyManager
+from .face_swap import FaceSwapManager
+from .websocket_server import ProgressStreamManager, get_progress_manager
 
 from .config import (
     ALL_IMAGE_MODELS, HUNYUAN3D_MODELS, QUALITY_PRESETS,
@@ -37,9 +42,18 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
             cache_dir=CACHE_DIR / "civitai",
             api_key=self.credential_manager.get_credential("civitai")
         )
-        self.lora_manager = LoRAManager(
-            lora_dir=MODELS_DIR / "loras"
+        
+        # LoRA system with suggestion engine
+        self.lora_suggestion_engine = LoRASuggestionEngine(
+            civitai_manager=self.civitai_manager,
+            cache_dir=CACHE_DIR / "lora_suggestions"
         )
+        self.lora_manager = LoRAManager(
+            lora_dir=MODELS_DIR / "loras",
+            suggestion_engine=self.lora_suggestion_engine
+        )
+        
+        # Queue and history
         self.queue_manager = QueueManager(
             max_workers=2,
             job_history_dir=OUTPUT_DIR / "job_history"
@@ -53,17 +67,63 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
             cache_dir=CACHE_DIR / "benchmarks"
         )
         
+        # New advanced features
+        self.video_generator = VideoGenerator(
+            cache_dir=CACHE_DIR / "video"
+        )
+        self.character_consistency_manager = CharacterConsistencyManager(
+            profiles_dir=CACHE_DIR / "characters" / "profiles",
+            embeddings_dir=CACHE_DIR / "characters" / "embeddings",
+            cache_dir=CACHE_DIR / "characters"
+        )
+        self.face_swap_manager = FaceSwapManager(
+            model_dir=MODELS_DIR / "insightface",
+            cache_dir=CACHE_DIR / "faceswap"
+        )
+        
+        # Progress streaming
+        self.progress_manager = get_progress_manager()
+        
+        # Additional setup
+        self.output_dir = OUTPUT_DIR
+        
         # Register job handlers
         self._register_job_handlers()
         
         # Load LoRAs on startup
         self.available_loras = self.lora_manager.scan_lora_directory()
         
+        # Initialize models
+        self._initialize_advanced_models()
+        
+    def _initialize_advanced_models(self):
+        """Initialize advanced models on startup"""
+        import asyncio
+        
+        # Start WebSocket server
+        async def start_ws():
+            await self.progress_manager.start_server()
+            
+        # Run in background
+        import threading
+        def run_async():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.create_task(start_ws())
+            loop.run_forever()
+            
+        ws_thread = threading.Thread(target=run_async, daemon=True)
+        ws_thread.start()
+        
+        logger.info("Advanced models initialization complete")
+        
     def _register_job_handlers(self):
         """Register handlers for queue processing"""
         self.queue_manager.register_handler("image", self._process_image_job)
         self.queue_manager.register_handler("3d", self._process_3d_job)
         self.queue_manager.register_handler("full_pipeline", self._process_full_pipeline_job)
+        self.queue_manager.register_handler("video", self._process_video_job)
+        self.queue_manager.register_handler("face_swap", self._process_face_swap_job)
         
     def _process_image_job(self, params: Dict[str, Any], progress_callback):
         """Process an image generation job"""
@@ -349,6 +409,78 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
         records = self.history_manager.get_history(limit=limit, **filters)
         return [record.to_dict() for record in records]
         
+    def check_system_requirements(self) -> Dict[str, Any]:
+        """Check system requirements for all features
+        
+        Returns:
+            Dictionary with system check results
+        """
+        import platform
+        import psutil
+        
+        requirements = {
+            "overall_status": "ready",
+            "errors": [],
+            "warnings": [],
+            "info": {}
+        }
+        
+        # Check GPU
+        if torch.cuda.is_available():
+            gpu_props = torch.cuda.get_device_properties(0)
+            vram_gb = gpu_props.total_memory / (1024**3)
+            requirements["info"]["gpu"] = gpu_props.name
+            requirements["info"]["vram"] = f"{vram_gb:.1f} GB"
+            
+            if vram_gb < 8:
+                requirements["errors"].append("Insufficient VRAM: At least 8GB required")
+                requirements["overall_status"] = "error"
+            elif vram_gb < 12:
+                requirements["warnings"].append("Limited VRAM: Some features may be restricted")
+                if requirements["overall_status"] != "error":
+                    requirements["overall_status"] = "warning"
+        else:
+            requirements["errors"].append("No CUDA GPU detected")
+            requirements["overall_status"] = "error"
+            
+        # Check RAM
+        ram_gb = psutil.virtual_memory().total / (1024**3)
+        requirements["info"]["ram"] = f"{ram_gb:.1f} GB"
+        if ram_gb < 16:
+            requirements["warnings"].append("Limited RAM: Recommended 16GB+")
+            
+        # Check disk space
+        disk_usage = psutil.disk_usage(str(MODELS_DIR.parent))
+        free_gb = disk_usage.free / (1024**3)
+        requirements["info"]["disk_free"] = f"{free_gb:.1f} GB"
+        if free_gb < 50:
+            requirements["warnings"].append("Low disk space: Models require significant storage")
+            
+        # Format as HTML
+        html = f"""
+        <div style='padding: 15px; background: #f5f5f5; border-radius: 8px;'>
+            <h3>System Requirements Check</h3>
+            <div style='margin: 10px 0; padding: 10px; background: {'#ffebee' if requirements['overall_status'] == 'error' else '#fff3e0' if requirements['overall_status'] == 'warning' else '#e8f5e9'}; border-radius: 4px;'>
+                <strong>Status:</strong> {requirements['overall_status'].upper()}
+            </div>
+            
+            <h4>System Info:</h4>
+            <ul>
+                <li><strong>GPU:</strong> {requirements['info'].get('gpu', 'Not detected')}</li>
+                <li><strong>VRAM:</strong> {requirements['info'].get('vram', 'N/A')}</li>
+                <li><strong>RAM:</strong> {requirements['info'].get('ram', 'N/A')}</li>
+                <li><strong>Free Disk:</strong> {requirements['info'].get('disk_free', 'N/A')}</li>
+                <li><strong>Platform:</strong> {platform.system()} {platform.release()}</li>
+            </ul>
+            
+            {'<h4>Errors:</h4><ul>' + ''.join(f'<li style="color: red;">{e}</li>' for e in requirements["errors"]) + '</ul>' if requirements["errors"] else ''}
+            {'<h4>Warnings:</h4><ul>' + ''.join(f'<li style="color: orange;">{w}</li>' for w in requirements["warnings"]) + '</ul>' if requirements["warnings"] else ''}
+        </div>
+        """
+        
+        requirements["html"] = html
+        return requirements
+        
     def get_system_stats(self) -> Dict[str, Any]:
         """Get comprehensive system statistics
         
@@ -357,7 +489,8 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
         """
         # Base stats
         stats = {
-            "models_loaded": int(bool(self.image_model)) + int(bool(self.hunyuan3d_model)),
+            "models_loaded": int(bool(self.image_model)) + int(bool(self.hunyuan3d_model)) + 
+                           int(self.video_generator.current_model is not None),
             "vram_used": 0.0,
             "gpu_usage": 0.0,
             "memory_usage": 0.0
@@ -409,3 +542,146 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
         
         # Could also clean old outputs if needed
         logger.info(f"Cleaned up data older than {days} days")
+        
+    def _process_video_job(self, params: Dict[str, Any], progress_callback):
+        """Process a video generation job"""
+        try:
+            from .video_generation import VideoModel, VideoGenerationParams
+            
+            # Extract parameters
+            model_type = params.get("model_type", VideoModel.LTXVIDEO)
+            video_params = VideoGenerationParams(
+                prompt=params.get("prompt", ""),
+                negative_prompt=params.get("negative_prompt", ""),
+                duration_seconds=params.get("duration", 5.0),
+                fps=params.get("fps", 24),
+                width=params.get("width", 768),
+                height=params.get("height", 512),
+                motion_strength=params.get("motion_strength", 1.0),
+                guidance_scale=params.get("guidance_scale", 7.5),
+                num_inference_steps=params.get("steps", 30),
+                seed=params.get("seed", -1)
+            )
+            
+            # Add character consistency if provided
+            character_id = params.get("character_id")
+            if character_id:
+                character = self.character_consistency_manager.get_character(character_id)
+                if character and character.full_embeddings is not None:
+                    video_params.character_embeddings = character.full_embeddings
+                    video_params.consistency_strength = params.get("consistency_strength", 0.8)
+                    
+            # Load model
+            progress_callback(0.1, "Loading video model...")
+            success, msg = self.video_generator.load_model(model_type)
+            if not success:
+                raise Exception(f"Failed to load model: {msg}")
+                
+            # Generate video
+            progress_callback(0.2, "Generating video...")
+            frames, info = self.video_generator.generate_video(video_params, progress_callback)
+            
+            if not frames:
+                raise Exception(info.get("error", "Video generation failed"))
+                
+            # Save video
+            progress_callback(0.9, "Encoding video...")
+            import uuid
+            video_path = self.output_dir / f"video_{uuid.uuid4()}.mp4"
+            success = self.video_generator.save_video(frames, video_path, fps=video_params.fps)
+            
+            if not success:
+                raise Exception("Failed to save video")
+                
+            # Save to history
+            self.history_manager.add_generation(
+                generation_id=str(uuid.uuid4()),
+                generation_type="video",
+                model_name=model_type.value,
+                prompt=video_params.prompt,
+                negative_prompt=video_params.negative_prompt,
+                parameters={
+                    "duration": video_params.duration_seconds,
+                    "fps": video_params.fps,
+                    "resolution": f"{video_params.width}x{video_params.height}",
+                    "steps": video_params.num_inference_steps
+                },
+                output_paths=[str(video_path)],
+                metadata=info
+            )
+            
+            progress_callback(1.0, "Video generation complete!")
+            return {"video_path": str(video_path), "info": info}
+            
+        except Exception as e:
+            logger.error(f"Video generation failed: {e}")
+            raise
+            
+    def _process_face_swap_job(self, params: Dict[str, Any], progress_callback):
+        """Process a face swap job"""
+        try:
+            from .face_swap import FaceSwapParams
+            
+            # Initialize models if needed
+            if not self.face_swap_manager.models_loaded:
+                progress_callback(0.1, "Initializing face swap models...")
+                success, msg = self.face_swap_manager.initialize_models()
+                if not success:
+                    raise Exception(f"Failed to initialize models: {msg}")
+                    
+            # Create parameters
+            swap_params = FaceSwapParams(
+                source_face_index=params.get("source_face_index", 0),
+                target_face_index=params.get("target_face_index", -1),
+                similarity_threshold=params.get("similarity_threshold", 0.6),
+                face_restore=params.get("face_restore", True),
+                face_restore_fidelity=params.get("restore_fidelity", 0.5),
+                background_enhance=params.get("background_enhance", False),
+                face_upsample=params.get("face_upsample", True)
+            )
+            
+            # Get images
+            source_image = params.get("source_image")
+            target_image = params.get("target_image")
+            
+            if not source_image or not target_image:
+                raise ValueError("Both source and target images are required")
+                
+            # Perform swap
+            progress_callback(0.2, "Swapping faces...")
+            result_img, info = self.face_swap_manager.swap_face(
+                source_image=source_image,
+                target_image=target_image,
+                params=swap_params
+            )
+            
+            if not result_img:
+                raise Exception(info.get("error", "Face swap failed"))
+                
+            # Save result
+            progress_callback(0.9, "Saving result...")
+            import uuid
+            output_path = self.output_dir / f"face_swap_{uuid.uuid4()}.png"
+            result_img.save(output_path)
+            
+            # Save to history
+            self.history_manager.add_generation(
+                generation_id=str(uuid.uuid4()),
+                generation_type="face_swap",
+                model_name="InsightFace",
+                prompt="Face Swap",
+                parameters={
+                    "source_faces": info.get("source_faces", 0),
+                    "target_faces": info.get("target_faces", 0),
+                    "swapped_faces": info.get("swapped_faces", 0)
+                },
+                output_paths=[str(output_path)],
+                metadata=info
+            )
+            
+            progress_callback(1.0, "Face swap complete!")
+            return {"image": result_img, "info": info, "path": str(output_path)}
+            
+        except Exception as e:
+            logger.error(f"Face swap failed: {e}")
+            raise

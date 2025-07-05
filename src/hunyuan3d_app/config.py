@@ -345,5 +345,161 @@ QUALITY_PRESETS = {
         num_3d_views=8,
         mesh_resolution=512,
         texture_resolution=2048
+    ),
+    "ultra": QualityPreset(
+        name="Ultra Quality",
+        image_steps=75,
+        image_guidance=9.0,
+        use_refiner=True,
+        num_3d_views=12,
+        mesh_resolution=1024,
+        texture_resolution=4096
     )
+}
+
+# --- Video Model Configurations ---
+VIDEO_MODELS = {
+    "ltxvideo": {
+        "name": "LTX-Video",
+        "repo_id": "Lightricks/LTX-Video",
+        "size": "~12 GB",
+        "vram_required": "12GB+",
+        "description": "Real-time video generation - 5s video in 4s",
+        "max_duration": 10.0,
+        "optimal_fps": 24,
+        "optimal_resolution": (768, 512),
+        "capabilities": ["real-time", "multiscale_rendering", "comfyui_compatible"]
+    },
+    "wan21": {
+        "name": "Wan 2.1",
+        "repo_id": "alibaba/Wan2.1",
+        "size": "~16 GB",
+        "vram_required": "16GB+",
+        "description": "Multilingual video generation with 3D causal VAE",
+        "max_duration": 8.0,
+        "optimal_fps": 16,
+        "optimal_resolution": (640, 480),
+        "capabilities": ["multilingual", "3D_causal_VAE", "text_rendering"]
+    },
+    "skyreels": {
+        "name": "SkyReels V1",
+        "repo_id": "skyreels/skyreels-v1",
+        "size": "~20 GB",
+        "vram_required": "20GB+",
+        "description": "Cinematic human animation - 33 expressions, 400+ movements",
+        "max_duration": 6.0,
+        "optimal_fps": 30,
+        "optimal_resolution": (1024, 576),
+        "capabilities": ["cinematic_human_animation", "facial_expressions", "film_quality"]
+    }
+}
+
+# --- IP-Adapter Configurations ---
+IP_ADAPTER_MODELS = {
+    "ip-adapter-plus_sd15": {
+        "name": "IP-Adapter Plus (SD1.5)",
+        "repo_id": "h94/IP-Adapter",
+        "filename": "models/ip-adapter-plus_sd15.safetensors",
+        "size": "~98 MB",
+        "base_model": "SD1.5",
+        "description": "Enhanced IP-Adapter for SD 1.5 models"
+    },
+    "ip-adapter-plus_sdxl": {
+        "name": "IP-Adapter Plus (SDXL)",
+        "repo_id": "h94/IP-Adapter",
+        "filename": "sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors",
+        "size": "~690 MB",
+        "base_model": "SDXL",
+        "description": "Enhanced IP-Adapter for SDXL models"
+    },
+    "ip-adapter-plus-face_sd15": {
+        "name": "IP-Adapter Plus Face (SD1.5)",
+        "repo_id": "h94/IP-Adapter",
+        "filename": "models/ip-adapter-plus-face_sd15.safetensors",
+        "size": "~98 MB",
+        "base_model": "SD1.5",
+        "description": "Face-focused IP-Adapter for character consistency"
+    },
+    "ip-adapter-plus-face_sdxl": {
+        "name": "IP-Adapter Plus Face (SDXL)",
+        "repo_id": "h94/IP-Adapter",
+        "filename": "sdxl_models/ip-adapter-plus-face_sdxl_vit-h.safetensors",
+        "size": "~690 MB",
+        "base_model": "SDXL",
+        "description": "Face-focused IP-Adapter for SDXL character consistency"
+    },
+    "ip-adapter_flux": {
+        "name": "IP-Adapter (FLUX)",
+        "repo_id": "h94/IP-Adapter",
+        "filename": "flux_models/ip-adapter_flux.safetensors",
+        "size": "~850 MB",
+        "base_model": "FLUX",
+        "description": "IP-Adapter for FLUX models (experimental)"
+    }
+}
+
+# --- Face Swap Model Configurations ---
+FACE_SWAP_MODELS = {
+    "inswapper_128": {
+        "name": "InsightFace Swapper 128",
+        "download_url": "https://github.com/deepinsight/insightface/releases/download/v0.7/inswapper_128.onnx",
+        "size": "~530 MB",
+        "description": "High quality face swapper model",
+        "resolution": 128
+    },
+    "buffalo_l": {
+        "name": "Buffalo L",
+        "repo_id": "buffalo_l",
+        "size": "~330 MB",
+        "description": "Face detection and analysis model",
+        "components": ["detection", "recognition", "attribute"]
+    }
+}
+
+# --- Face Restoration Models ---
+FACE_RESTORE_MODELS = {
+    "codeformer": {
+        "name": "CodeFormer",
+        "repo_id": "sczhou/CodeFormer",
+        "size": "~370 MB",
+        "description": "Best quality face restoration with adjustable fidelity"
+    },
+    "gfpgan": {
+        "name": "GFPGAN v1.4",
+        "repo_id": "TencentARC/GFPGAN",
+        "size": "~340 MB",
+        "description": "Popular face restoration model"
+    },
+    "restoreformer": {
+        "name": "RestoreFormer",
+        "repo_id": "wzhouxiff/RestoreFormerPlusPlus",
+        "size": "~290 MB",
+        "description": "Efficient face restoration"
+    }
+}
+
+# --- LoRA Auto-Suggestion Settings ---
+LORA_SUGGESTION_CONFIG = {
+    "max_suggestions": 5,
+    "min_relevance_score": 0.3,
+    "auto_download_threshold": 0.7,
+    "search_providers": ["civitai", "huggingface"],
+    "concept_mappings": {
+        "portrait": ["face", "headshot", "person", "character"],
+        "landscape": ["scenery", "nature", "outdoor", "environment"],
+        "anime": ["anime", "manga", "kawaii", "chibi", "waifu"],
+        "realistic": ["photorealistic", "realistic", "photograph", "real"],
+        "fantasy": ["fantasy", "magical", "mythical", "dragon", "wizard"],
+        "scifi": ["sci-fi", "futuristic", "cyberpunk", "space", "robot"]
+    }
+}
+
+# --- WebSocket Progress Server ---
+WEBSOCKET_CONFIG = {
+    "host": "localhost",
+    "port": 8765,
+    "batch_size": 10,
+    "batch_interval": 0.1,
+    "heartbeat_interval": 30,
+    "message_retention": 60  # seconds
 }
