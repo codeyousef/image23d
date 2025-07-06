@@ -34,7 +34,8 @@
       "Bash(pip3 list:*)",
       "Bash(cat:*)",
       "Bash(git clone:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "Bash(git rm:*)"
     ],
     "deny": []
   }

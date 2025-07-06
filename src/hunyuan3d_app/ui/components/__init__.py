@@ -11,6 +11,7 @@ from .common import (
 from .header import create_header
 from .model_status import create_model_status
 from .progress import create_progress_component
+from .media_sidebar import create_media_sidebar
 
 __all__ = [
     # Common components
@@ -24,5 +25,6 @@ __all__ = [
     # Specific components
     "create_header",
     "create_model_status",
-    "create_progress_component"
+    "create_progress_component",
+    "create_media_sidebar"
 ]

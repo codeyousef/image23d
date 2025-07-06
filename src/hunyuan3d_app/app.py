@@ -53,10 +53,9 @@ elif sys_req["overall_status"] == "warning":
 else:
     logger.info("System meets all recommended requirements.")
 
-# Create enhanced interface
-interface = create_enhanced_interface(app)
-
 if __name__ == "__main__":
+    # Create enhanced interface only when run directly
+    interface = create_enhanced_interface(app)
     # Get port from environment variable or use a range of ports
     import os
     import socket
