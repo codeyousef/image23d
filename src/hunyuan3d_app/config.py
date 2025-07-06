@@ -362,79 +362,94 @@ VIDEO_MODELS = {
     "ltxvideo": {
         "name": "LTX-Video",
         "repo_id": "Lightricks/LTX-Video",
-        "size": "~12 GB",
-        "vram_required": "12GB+",
-        "description": "Real-time video generation - 5s video in 4s",
+        "model_file": "ltxvideo_diffusion_pytorch_model.safetensors",
+        "vae_file": "vae/diffusion_pytorch_model.safetensors",
+        "scheduler_config": "scheduler/scheduler_config.json",
+        "size": "~30 GB",
+        "vram_required": "24GB+",
+        "description": "State-of-the-art real-time video generation - 30 FPS at 1216×704",
         "max_duration": 10.0,
-        "optimal_fps": 24,
-        "optimal_resolution": (768, 512),
-        "capabilities": ["real-time", "multiscale_rendering", "comfyui_compatible"]
-    },
-    "wan21": {
-        "name": "Wan 2.1",
-        "repo_id": "alibaba/Wan2.1",
-        "size": "~16 GB",
-        "vram_required": "16GB+",
-        "description": "Multilingual video generation with 3D causal VAE",
-        "max_duration": 8.0,
-        "optimal_fps": 16,
-        "optimal_resolution": (640, 480),
-        "capabilities": ["multilingual", "3D_causal_VAE", "text_rendering"]
-    },
-    "skyreels": {
-        "name": "SkyReels V1",
-        "repo_id": "skyreels/skyreels-v1",
-        "size": "~20 GB",
-        "vram_required": "20GB+",
-        "description": "Cinematic human animation - 33 expressions, 400+ movements",
-        "max_duration": 6.0,
         "optimal_fps": 30,
-        "optimal_resolution": (1024, 576),
-        "capabilities": ["cinematic_human_animation", "facial_expressions", "film_quality"]
+        "optimal_resolution": (1216, 704),
+        "capabilities": ["real-time", "high_resolution", "diffusers_compatible"],
+        "requires_login": False
+    },
+    "mochi-preview": {
+        "name": "Mochi 1 Preview",
+        "repo_id": "genmo/mochi-1-preview",
+        "model_file": "mochi_preview_dit_f8.safetensors",
+        "vae_file": "mochi_preview_vae_f8.safetensors",
+        "size": "~10 GB",
+        "vram_required": "12GB+",
+        "description": "480p video at 30fps, great for lower VRAM GPUs",
+        "max_duration": 5.0,
+        "optimal_fps": 30,
+        "optimal_resolution": (848, 480),
+        "capabilities": ["efficient", "480p", "fast_generation"],
+        "requires_login": False
+    },
+    "cogvideox-5b": {
+        "name": "CogVideoX-5B",
+        "repo_id": "THUDM/CogVideoX-5b",
+        "model_file": "transformer/diffusion_pytorch_model.safetensors",
+        "vae_file": "vae/diffusion_pytorch_model.safetensors",
+        "size": "~20 GB",
+        "vram_required": "16GB+",
+        "description": "High quality 720x480 video generation, 6 seconds at 8 fps",
+        "max_duration": 6.0,
+        "optimal_fps": 8,
+        "optimal_resolution": (720, 480),
+        "capabilities": ["high_quality", "stable_generation"],
+        "requires_login": False
     }
 }
 
 # --- IP-Adapter Configurations ---
 IP_ADAPTER_MODELS = {
-    "ip-adapter-plus_sd15": {
-        "name": "IP-Adapter Plus (SD1.5)",
-        "repo_id": "h94/IP-Adapter",
-        "filename": "models/ip-adapter-plus_sd15.safetensors",
-        "size": "~98 MB",
-        "base_model": "SD1.5",
-        "description": "Enhanced IP-Adapter for SD 1.5 models"
-    },
-    "ip-adapter-plus_sdxl": {
-        "name": "IP-Adapter Plus (SDXL)",
-        "repo_id": "h94/IP-Adapter",
-        "filename": "sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors",
-        "size": "~690 MB",
+    "ip-adapter-faceid-sdxl": {
+        "name": "IP-Adapter FaceID SDXL",
+        "repo_id": "h94/IP-Adapter-FaceID",
+        "filename": "ip-adapter-faceid_sdxl.bin",
+        "lora_file": "ip-adapter-faceid_sdxl_lora.safetensors",
+        "size": "~1.2 GB",
         "base_model": "SDXL",
-        "description": "Enhanced IP-Adapter for SDXL models"
+        "description": "Face ID adapter for consistent character generation in SDXL",
+        "requires_insightface": True
     },
-    "ip-adapter-plus-face_sd15": {
-        "name": "IP-Adapter Plus Face (SD1.5)",
-        "repo_id": "h94/IP-Adapter",
-        "filename": "models/ip-adapter-plus-face_sd15.safetensors",
-        "size": "~98 MB",
+    "ip-adapter-faceid-plusv2": {
+        "name": "IP-Adapter FaceID Plus V2",
+        "repo_id": "h94/IP-Adapter-FaceID",
+        "filename": "ip-adapter-faceid-plusv2_sd15.bin",
+        "lora_file": "ip-adapter-faceid-plusv2_sd15_lora.safetensors",
+        "size": "~1.0 GB",
         "base_model": "SD1.5",
-        "description": "Face-focused IP-Adapter for character consistency"
+        "description": "Enhanced face consistency for SD 1.5 models",
+        "requires_insightface": True
+    },
+    "ip-adapter-faceid-portrait": {
+        "name": "IP-Adapter FaceID Portrait",
+        "repo_id": "h94/IP-Adapter-FaceID",
+        "filename": "ip-adapter-faceid-portrait-v11_sd15.bin",
+        "size": "~433 MB",
+        "base_model": "SD1.5",
+        "description": "Specialized for portrait generation with face consistency",
+        "requires_insightface": True
     },
     "ip-adapter-plus-face_sdxl": {
         "name": "IP-Adapter Plus Face (SDXL)",
         "repo_id": "h94/IP-Adapter",
         "filename": "sdxl_models/ip-adapter-plus-face_sdxl_vit-h.safetensors",
-        "size": "~690 MB",
+        "size": "~698 MB",
         "base_model": "SDXL",
         "description": "Face-focused IP-Adapter for SDXL character consistency"
     },
-    "ip-adapter_flux": {
-        "name": "IP-Adapter (FLUX)",
+    "ip-adapter_sdxl": {
+        "name": "IP-Adapter (SDXL)",
         "repo_id": "h94/IP-Adapter",
-        "filename": "flux_models/ip-adapter_flux.safetensors",
-        "size": "~850 MB",
-        "base_model": "FLUX",
-        "description": "IP-Adapter for FLUX models (experimental)"
+        "filename": "sdxl_models/ip-adapter_sdxl.safetensors",
+        "size": "~698 MB",
+        "base_model": "SDXL",
+        "description": "General purpose IP-Adapter for SDXL models"
     }
 }
 
@@ -442,17 +457,20 @@ IP_ADAPTER_MODELS = {
 FACE_SWAP_MODELS = {
     "inswapper_128": {
         "name": "InsightFace Swapper 128",
-        "download_url": "https://github.com/deepinsight/insightface/releases/download/v0.7/inswapper_128.onnx",
-        "size": "~530 MB",
+        "repo_id": "deepinsight/inswapper",
+        "model_file": "inswapper_128.onnx",
+        "download_url": "https://huggingface.co/deepinsight/inswapper/resolve/main/inswapper_128.onnx",
+        "size": "~538 MB",
         "description": "High quality face swapper model",
         "resolution": 128
     },
     "buffalo_l": {
-        "name": "Buffalo L",
-        "repo_id": "buffalo_l",
-        "size": "~330 MB",
-        "description": "Face detection and analysis model",
-        "components": ["detection", "recognition", "attribute"]
+        "name": "Buffalo L (Face Analysis)",
+        "repo_id": "deepinsight/buffalo_l",
+        "download_url": "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip",
+        "size": "~326 MB",
+        "description": "Complete face detection and analysis model",
+        "components": ["1k3d68.onnx", "2d106det.onnx", "det_10g.onnx", "genderage.onnx", "w600k_r50.onnx"]
     }
 }
 
@@ -461,20 +479,26 @@ FACE_RESTORE_MODELS = {
     "codeformer": {
         "name": "CodeFormer",
         "repo_id": "sczhou/CodeFormer",
-        "size": "~370 MB",
+        "model_file": "codeformer.pth",
+        "download_url": "https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/codeformer.pth",
+        "size": "~377 MB",
         "description": "Best quality face restoration with adjustable fidelity"
     },
     "gfpgan": {
         "name": "GFPGAN v1.4",
         "repo_id": "TencentARC/GFPGAN",
-        "size": "~340 MB",
-        "description": "Popular face restoration model"
+        "model_file": "GFPGANv1.4.pth",
+        "download_url": "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth",
+        "size": "~349 MB",
+        "description": "Popular face restoration model with good balance"
     },
     "restoreformer": {
-        "name": "RestoreFormer",
+        "name": "RestoreFormer++",
         "repo_id": "wzhouxiff/RestoreFormerPlusPlus",
+        "model_file": "RestoreFormer++.pth",
+        "download_url": "https://github.com/wzhouxiff/RestoreFormerPlusPlus/releases/download/v1.0.0/RestoreFormer++.pth",
         "size": "~290 MB",
-        "description": "Efficient face restoration"
+        "description": "Efficient face restoration with good quality"
     }
 }
 

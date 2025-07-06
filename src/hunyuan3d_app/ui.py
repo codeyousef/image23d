@@ -156,9 +156,9 @@ def create_interface(app: Hunyuan3DStudio):
                         with gr.Row():
                             only_generate_image = gr.Checkbox(
                                 label="Generate image only (skip 3D conversion)",
-                                value=False,
-                                info="Generate only the image without creating a 3D model"
+                                value=False
                             )
+                            gr.Markdown("*Generate only the image without creating a 3D model*")
 
                         # JavaScript to disable 3D-related options when only_generate_image is checked
                         only_generate_image.change(
@@ -182,9 +182,9 @@ def create_interface(app: Hunyuan3DStudio):
                             with gr.Row():
                                 keep_image_loaded = gr.Checkbox(
                                     label="Keep image model loaded",
-                                    value=False,
-                                    info="Uses more VRAM but faster for multiple generations"
+                                    value=False
                                 )
+                                gr.Markdown("*Uses more VRAM but faster for multiple generations*")
                                 save_intermediate = gr.Checkbox(
                                     label="Save intermediate outputs",
                                     value=True
@@ -262,8 +262,8 @@ def create_interface(app: Hunyuan3DStudio):
                     outputs=[generate_btn, stop_btn]
                 )
 
-            # Model Manager Tab
-            with gr.Tab("📦 Model Manager"):
+            # Downloads Manager Tab
+            with gr.Tab("📦 Downloads Manager"):
                 gr.Markdown("### Download and manage AI models")
 
                 # Add HF token input at the top
@@ -276,9 +276,9 @@ def create_interface(app: Hunyuan3DStudio):
                             label="HF Token",
                             type="password",
                             placeholder="hf_...",
-                            info="Your Hugging Face access token",
                             value=app.model_manager.hf_token
                         )
+                        gr.Markdown("*Your Hugging Face access token*")
                         set_token_btn = gr.Button("Set Token", variant="secondary")
                         token_status = gr.HTML()
 

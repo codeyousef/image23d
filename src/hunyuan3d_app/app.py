@@ -12,14 +12,14 @@ if __name__ == "__main__":
     if parent_dir not in sys.path:
         sys.path.insert(0, parent_dir)
         
-    from hunyuan3d_app.hunyuan3d_studio import Hunyuan3DStudio
-    from hunyuan3d_app.ui import create_interface
-    from hunyuan3d_app.gpu_optimizer import get_gpu_optimizer
+    from hunyuan3d_app.core.studio_enhanced import Hunyuan3DStudioEnhanced
+    from hunyuan3d_app.ui.enhanced import create_enhanced_interface
+    from hunyuan3d_app.utils.gpu import get_gpu_optimizer
 else:
     # When imported as a module, use relative imports
-    from .hunyuan3d_studio import Hunyuan3DStudio
-    from .ui import create_interface
-    from .gpu_optimizer import get_gpu_optimizer
+    from .core.studio_enhanced import Hunyuan3DStudioEnhanced
+    from .ui.enhanced import create_enhanced_interface
+    from .utils.gpu import get_gpu_optimizer
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
@@ -29,16 +29,16 @@ logger = logging.getLogger(__name__)
 logger.info("Initializing GPU optimizations...")
 gpu_optimizer = get_gpu_optimizer()
 
-# Create the app
-app = Hunyuan3DStudio()
+# Create the enhanced app
+app = Hunyuan3DStudioEnhanced()
 
 # Check system requirements
 if __name__ == "__main__":
     # When run directly, use absolute imports
-    from hunyuan3d_app.system_checker import check_system_requirements
+    from hunyuan3d_app.utils.system import check_system_requirements
 else:
     # When imported as a module, use relative imports
-    from .system_checker import check_system_requirements
+    from .utils.system import check_system_requirements
 sys_req = check_system_requirements()
 if sys_req["overall_status"] == "error":
     logger.warning("System does not meet minimum requirements:")
@@ -53,8 +53,8 @@ elif sys_req["overall_status"] == "warning":
 else:
     logger.info("System meets all recommended requirements.")
 
-# Create interface
-interface = create_interface(app)
+# Create enhanced interface
+interface = create_enhanced_interface(app)
 
 if __name__ == "__main__":
     # Get port from environment variable or use a range of ports
@@ -80,9 +80,21 @@ if __name__ == "__main__":
 
     logger.info(f"Starting server on port {port}")
 
+    # Add allowed paths for file access
+    from pathlib import Path
+    allowed_paths = [
+        str(Path("outputs").absolute()),
+        str(Path("cache").absolute()),
+        str(app.output_dir.absolute()) if hasattr(app, 'output_dir') else None,
+        str(app.cache_dir.absolute()) if hasattr(app, 'cache_dir') else None,
+    ]
+    # Remove None values
+    allowed_paths = [p for p in allowed_paths if p is not None]
+    
     interface.launch(
         share=False,
         server_name="0.0.0.0",
         server_port=port,
-        inbrowser=True
+        inbrowser=True,
+        allowed_paths=allowed_paths
     )

@@ -21,7 +21,20 @@
       "Bash(ls:*)",
       "Bash(git reset:*)",
       "Bash(git restore:*)",
-      "Bash(true)"
+      "Bash(true)",
+      "Bash(uv add:*)",
+      "Bash(uv sync:*)",
+      "Bash(source:*)",
+      "Bash(../src/python:*)",
+      "Bash(sed:*)",
+      "Bash(git checkout:*)",
+      "Bash(tree:*)",
+      "Bash(mkdir:*)",
+      "Bash(touch:*)",
+      "Bash(pip3 list:*)",
+      "Bash(cat:*)",
+      "Bash(git clone:*)",
+      "Bash(pkill:*)"
     ],
     "deny": []
   }

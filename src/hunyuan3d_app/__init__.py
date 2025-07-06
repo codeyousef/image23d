@@ -28,6 +28,42 @@ except ImportError:
     # tqdm might not be available at this point, which is fine
     pass
 
-from .app import interface
+# Compatibility imports for the reorganized structure
+# This allows existing code to continue working with the new module layout
+
+# Core classes
+from .core.studio import Hunyuan3DStudio
+from .core.studio_enhanced import Hunyuan3DStudioEnhanced
+
+# Main interfaces - keeping the old import working
+try:
+    from .app import interface
+except ImportError:
+    interface = None
+
+# Backward compatibility aliases
+from .models import ModelManager as model_manager
+from .services.queue import QueueManager as queue_manager
+from .services.history import HistoryManager as history_manager
+from .generation.image import ImageGenerator as image_generation
+from .utils.memory import get_memory_manager as memory_manager
+from .utils.gpu import get_gpu_optimizer as gpu_optimizer
 
 __version__ = "0.1.0"
+
+__all__ = [
+    # Core classes
+    "Hunyuan3DStudio",
+    "Hunyuan3DStudioEnhanced",
+    
+    # Main interface
+    "interface",
+    
+    # Compatibility aliases
+    "model_manager",
+    "queue_manager",
+    "history_manager",
+    "image_generation",
+    "memory_manager",
+    "gpu_optimizer"
+]
