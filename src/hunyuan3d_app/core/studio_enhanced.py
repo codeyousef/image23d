@@ -771,7 +771,7 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
             from ..features.face_swap import FaceSwapParams
             
             # Initialize models if needed
-            if not self.face_swap_manager.models_loaded:
+            if not self.face_swap_manager.facefusion_loaded:
                 progress_callback(0.1, "Initializing face swap models...")
                 success, msg = self.face_swap_manager.initialize_models()
                 if not success:
@@ -818,6 +818,7 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
                 generation_type="face_swap",
                 model_name="InsightFace",
                 prompt="Face Swap",
+                negative_prompt="",  # Face swap doesn't use negative prompts
                 parameters={
                     "source_faces": info.get("source_faces", 0),
                     "target_faces": info.get("target_faces", 0),
