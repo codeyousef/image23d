@@ -67,11 +67,11 @@ def create_face_swap_tab(app: Any) -> None:
                         )
                     
                     # FaceFusion 2025 Options
-                    with gr.Accordion("🚀 FaceFusion 3.2.0 (2025 Features)", open=True):
+                    with gr.Accordion("🚀 FaceFusion 3.2.0 Settings", open=True):
                         use_facefusion = gr.Checkbox(
                             label="Enable FaceFusion 3.2.0",
                             value=True,
-                            info="Use state-of-the-art 2025 face swapping technology"
+                            visible=False  # Always enabled, hide the checkbox
                         )
                         
                         facefusion_model = gr.Dropdown(
@@ -122,107 +122,23 @@ def create_face_swap_tab(app: Any) -> None:
                         
                         gr.Markdown("*🎯 FaceFusion 3.2.0 provides superior quality and accuracy*")
                         
-                        # Update visibility based on FaceFusion toggle
-                        def update_facefusion_visibility(enabled):
-                            return [
-                                gr.update(visible=enabled),  # facefusion_model
-                                gr.update(visible=enabled),  # pixel_boost
-                                gr.update(visible=enabled),  # live_portrait
-                                gr.update(visible=enabled),  # face_detector_score
-                            ]
+                        # FaceFusion is always enabled - no visibility toggle needed
                         
-                        use_facefusion.change(
-                            update_facefusion_visibility,
-                            inputs=[use_facefusion],
-                            outputs=[facefusion_model, pixel_boost, live_portrait, face_detector_score]
-                        )
+                    # Legacy options - set defaults but hide from user
+                    face_restore = gr.Checkbox(value=False, visible=False)
+                    face_restore_model = gr.Dropdown(choices=["CodeFormer"], value="CodeFormer", visible=False)
+                    face_restore_fidelity = gr.Slider(value=0.5, visible=False)
+                    background_enhance = gr.Checkbox(value=False, visible=False)
+                    face_upsample = gr.Checkbox(value=False, visible=False)
+                    upscale_factor = gr.Slider(value=1, visible=False)
                         
-                    # Enhancement options (Legacy)
-                    with gr.Accordion("🔧 Enhancement Options (Legacy)", open=False):
-                        face_restore = gr.Checkbox(
-                            label="Face Restoration",
-                            value=True
-                        )
-                        
-                        face_restore_model = gr.Dropdown(
-                            choices=["CodeFormer", "GFPGAN", "RestoreFormer"],
-                            value="CodeFormer",
-                            label="Restoration Model",
-                            visible=True
-                        )
-                        
-                        face_restore_fidelity = gr.Slider(
-                            minimum=0.0,
-                            maximum=1.0,
-                            value=0.5,
-                            step=0.1,
-                            label="Restoration Fidelity",
-                            visible=True
-                        )
-                        gr.Markdown("*0 = Natural, 1 = Enhanced*")
-                        
-                        background_enhance = gr.Checkbox(
-                            label="Enhance Background",
-                            value=False
-                        )
-                        
-                        face_upsample = gr.Checkbox(
-                            label="Upsample Face",
-                            value=True
-                        )
-                        
-                        upscale_factor = gr.Slider(
-                            minimum=1,
-                            maximum=4,
-                            value=2,
-                            step=1,
-                            label="Upscale Factor",
-                            visible=True
-                        )
-                        
-                    # Advanced options
-                    with gr.Accordion("Advanced Options", open=False):
-                        preserve_expression = gr.Checkbox(
-                            label="Preserve Original Expression",
-                            value=False
-                        )
-                        
-                        expression_weight = gr.Slider(
-                            minimum=0.0,
-                            maximum=1.0,
-                            value=0.3,
-                            step=0.1,
-                            label="Expression Weight",
-                            visible=False
-                        )
-                        
-                        preserve_lighting = gr.Checkbox(
-                            label="Preserve Original Lighting",
-                            value=True
-                        )
-                        
-                        lighting_weight = gr.Slider(
-                            minimum=0.0,
-                            maximum=1.0,
-                            value=0.5,
-                            step=0.1,
-                            label="Lighting Weight",
-                            visible=True
-                        )
-                        
-                        preserve_age = gr.Checkbox(
-                            label="Preserve Original Age",
-                            value=True
-                        )
-                        
-                        age_weight = gr.Slider(
-                            minimum=0.0,
-                            maximum=1.0,
-                            value=0.7,
-                            step=0.1,
-                            label="Age Weight",
-                            visible=True
-                        )
+                    # Advanced options - hidden, handled by FaceFusion
+                    preserve_expression = gr.Checkbox(value=False, visible=False)
+                    expression_weight = gr.Slider(value=0.3, visible=False)
+                    preserve_lighting = gr.Checkbox(value=True, visible=False)
+                    lighting_weight = gr.Slider(value=0.5, visible=False)
+                    preserve_age = gr.Checkbox(value=True, visible=False)
+                    age_weight = gr.Slider(value=0.7, visible=False)
                         
                     swap_image_btn = gr.Button(
                         "🔄 Swap Face",

@@ -16,7 +16,6 @@ try:
 except ImportError:
     torch = None
 
-from .models import FaceDetector, FaceSwapper, FaceRestorer, FaceEnhancer
 from .facefusion_adapter import FaceFusionAdapter, FaceFusionConfig, FaceFusionModel
 
 logger = logging.getLogger(__name__)
@@ -99,18 +98,11 @@ class FaceSwapManager:
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
-        # Initialize FaceFusion adapter (2025 primary method)
+        # Initialize FaceFusion adapter (only method)
         facefusion_path = Path("./models/facefusion")
         self.facefusion_adapter = FaceFusionAdapter(facefusion_path=facefusion_path)
         
-        # Initialize legacy components (fallback)
-        self.face_detector = FaceDetector(model_dir=self.model_dir)
-        self.face_swapper = FaceSwapper(model_dir=self.model_dir)
-        self.face_restorer = FaceRestorer(model_dir=self.model_dir)
-        self.face_enhancer = FaceEnhancer(model_dir=self.model_dir)
-        
-        # Models loaded flags
-        self.models_loaded = False
+        # FaceFusion loaded flag
         self.facefusion_loaded = False
         
     def initialize_models(
@@ -118,7 +110,7 @@ class FaceSwapManager:
         device: str = "cuda",
         download_if_missing: bool = True
     ) -> Tuple[bool, str]:
-        """Initialize all required models.
+        """Initialize FaceFusion 3.2.0 models.
         
         Args:
             device: Device to use (cuda/cpu)
@@ -128,83 +120,19 @@ class FaceSwapManager:
             Tuple of (success, message)
         """
         try:
-            # First try to initialize FaceFusion (2025 primary method)
             logger.info("Initializing FaceFusion 3.2.0...")
             ff_success, ff_msg = self.facefusion_adapter.initialize()
             if ff_success:
                 self.facefusion_loaded = True
                 logger.info("FaceFusion 3.2.0 initialized successfully")
-                # Also initialize legacy components for fallback/compatibility
-                self._initialize_legacy_components(device, download_if_missing)
                 return True, "FaceFusion 3.2.0 initialized successfully"
             else:
-                logger.warning(f"FaceFusion initialization failed: {ff_msg}")
-                logger.info("Falling back to legacy face swap components...")
-            
-            # Fallback: Initialize legacy components
-            components = [
-                ("Face Detector", self.face_detector),
-                ("Face Swapper", self.face_swapper),
-                ("Face Restorer", self.face_restorer),
-                ("Face Enhancer", self.face_enhancer)
-            ]
-            
-            initialized_components = []
-            failed_components = []
-            
-            for name, component in components:
-                logger.info(f"Initializing {name}...")
-                success, msg = component.initialize(device, download_if_missing)
-                if success:
-                    initialized_components.append(name)
-                else:
-                    failed_components.append((name, msg))
-                    # Only fail completely if Face Detector fails (it's essential)
-                    if name == "Face Detector":
-                        return False, f"Failed to initialize {name}: {msg}"
-            
-            # Mark as loaded if at least face detector is working
-            if "Face Detector" in initialized_components:
-                self.models_loaded = True
-                
-                if failed_components:
-                    warning_msg = "Legacy models partially initialized. Failed components:\n"
-                    for comp, err in failed_components:
-                        warning_msg += f"- {comp}: {err}\n"
-                    logger.warning(warning_msg)
-                    return True, warning_msg
-                else:
-                    return True, "Legacy models initialized successfully"
-            else:
-                return False, "Failed to initialize essential components"
+                logger.error(f"FaceFusion initialization failed: {ff_msg}")
+                return False, f"FaceFusion initialization failed: {ff_msg}"
             
         except Exception as e:
-            logger.error(f"Error initializing models: {e}")
-            return False, f"Error initializing models: {str(e)}"
-    
-    def _initialize_legacy_components(self, device: str, download_if_missing: bool):
-        """Initialize legacy components for compatibility"""
-        try:
-            components = [
-                ("Face Detector", self.face_detector),
-                ("Face Restorer", self.face_restorer), 
-                ("Face Enhancer", self.face_enhancer)
-            ]
-            
-            for name, component in components:
-                try:
-                    success, msg = component.initialize(device, download_if_missing)
-                    if success:
-                        logger.info(f"Legacy {name} initialized")
-                    else:
-                        logger.warning(f"Legacy {name} failed: {msg}")
-                except Exception as e:
-                    logger.warning(f"Legacy {name} error: {e}")
-            
-            self.models_loaded = True
-            
-        except Exception as e:
-            logger.warning(f"Error initializing legacy components: {e}")
+            logger.error(f"Error initializing FaceFusion: {e}")
+            return False, f"Error initializing FaceFusion: {str(e)}"
     
     def swap_face(
         self,
@@ -222,19 +150,14 @@ class FaceSwapManager:
         Returns:
             Tuple of (result image, info dict)
         """
-        if not self.models_loaded and not self.facefusion_loaded:
-            return None, {"error": "Models not initialized. Call initialize_models() first."}
+        if not self.facefusion_loaded:
+            return None, {"error": "FaceFusion not initialized. Call initialize_models() first."}
         
         if params is None:
             params = FaceSwapParams()
         
-        # Use FaceFusion if available and enabled (2025 primary method)
-        if params.use_facefusion and self.facefusion_loaded:
-            return self._swap_face_facefusion(source_image, target_image, params)
-        
-        # Fallback to legacy method
-        logger.info("Using legacy face swap method")
-        return self._swap_face_legacy(source_image, target_image, params)
+        # Use FaceFusion 3.2.0 (only method)
+        return self._swap_face_facefusion(source_image, target_image, params)
     
     def _swap_face_facefusion(self,
                              source_image: Union[Image.Image, np.ndarray, str, Path],
@@ -264,8 +187,8 @@ class FaceSwapManager:
             )
             
             if result_image is None:
-                logger.warning("FaceFusion swap failed, falling back to legacy method")
-                return self._swap_face_legacy(source_image, target_image, params)
+                error_msg = info.get("error", "FaceFusion face swap failed")
+                return None, {"error": f"Face swap failed: {error_msg}"}
             
             # Add FaceFusion-specific info
             info.update({
@@ -281,130 +204,9 @@ class FaceSwapManager:
             
         except Exception as e:
             logger.error(f"Error during FaceFusion face swap: {e}")
-            logger.info("Falling back to legacy face swap method")
-            return self._swap_face_legacy(source_image, target_image, params)
+            return None, {"error": f"FaceFusion error: {str(e)}"}
     
-    def _swap_face_legacy(self,
-                         source_image: Union[Image.Image, np.ndarray, str, Path],
-                         target_image: Union[Image.Image, np.ndarray, str, Path],
-                         params: FaceSwapParams) -> Tuple[Optional[Image.Image], Dict[str, Any]]:
-        """Legacy face swap method using InsightFace components"""
-        logger.warning("Using legacy face swap method - may have limited functionality")
-        
-        # Use simple face swap as the most reliable legacy method
-        try:
-            from .simple_swap import SimpleFaceSwap
-            simple_swapper = SimpleFaceSwap()
-            
-            # Convert images to PIL format
-            if isinstance(source_image, Image.Image):
-                source_pil = source_image
-            else:
-                source_img = self._load_image(source_image)
-                source_pil = Image.fromarray(cv2.cvtColor(source_img, cv2.COLOR_BGR2RGB))
-            
-            if isinstance(target_image, Image.Image):
-                target_pil = target_image
-            else:
-                target_img = self._load_image(target_image)
-                target_pil = Image.fromarray(cv2.cvtColor(target_img, cv2.COLOR_BGR2RGB))
-            
-            # Use simple face swap method
-            result_img, info = simple_swapper.swap_faces(
-                source_pil,
-                target_pil,
-                source_bbox=None,  # Auto-detect
-                target_bbox=None,  # Auto-detect
-                blend_mode=params.blend_mode.value
-            )
-            
-            if result_img is None:
-                return None, {"error": "Legacy face swap failed"}
-            
-            # Add legacy method info
-            info.update({
-                "method": "Legacy Simple Swap",
-                "note": "Consider upgrading to FaceFusion for better results"
-            })
-            
-            logger.info("Legacy face swap completed using simple method")
-            return result_img, info
-            
-        except Exception as e:
-            logger.error(f"Error during legacy face swap: {e}")
-            return None, {"error": f"Legacy face swap failed: {str(e)}"}
     
-    def detect_faces(self, image: Union[Image.Image, np.ndarray, str, Path]) -> List[FaceInfo]:
-        """Detect faces in an image.
-        
-        Args:
-            image: Input image
-            
-        Returns:
-            List of detected faces
-        """
-        if not self.models_loaded:
-            raise RuntimeError("Models not initialized. Call initialize_models() first.")
-        
-        img = self._load_image(image)
-        return self.face_detector.detect_faces(img)
-    
-    def _load_image(self, image: Union[Image.Image, np.ndarray, str, Path]) -> np.ndarray:
-        """Load image from various input types.
-        
-        Args:
-            image: Input image
-            
-        Returns:
-            OpenCV image array (BGR)
-        """
-        if isinstance(image, (str, Path)):
-            img = cv2.imread(str(image))
-            if img is None:
-                raise ValueError(f"Could not load image from {image}")
-            return img
-        elif isinstance(image, Image.Image):
-            return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-        elif isinstance(image, np.ndarray):
-            if image.shape[2] == 3:
-                return image
-            elif image.shape[2] == 4:
-                return cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
-        else:
-            raise ValueError(f"Unsupported image type: {type(image)}")
-    
-    def _calculate_face_similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
-        """Calculate cosine similarity between face embeddings.
-        
-        Args:
-            embedding1: First face embedding
-            embedding2: Second face embedding
-            
-        Returns:
-            Similarity score (0-1)
-        """
-        # Ensure embeddings are 1D
-        emb1 = embedding1.flatten()
-        emb2 = embedding2.flatten()
-        
-        dot_product = np.dot(emb1, emb2)
-        norm1 = np.linalg.norm(emb1)
-        norm2 = np.linalg.norm(emb2)
-        
-        logger.debug(f"Embedding shapes: {emb1.shape}, {emb2.shape}")
-        logger.debug(f"Embedding norms: {norm1:.3f}, {norm2:.3f}")
-        logger.debug(f"Dot product: {dot_product:.3f}")
-        
-        if norm1 == 0 or norm2 == 0:
-            logger.warning("One or both embeddings have zero norm!")
-            return 0.0
-        
-        similarity = dot_product / (norm1 * norm2)
-        logger.debug(f"Raw similarity: {similarity:.3f}")
-        
-        # Note: High similarity between different faces suggests the embeddings
-        # are not discriminative enough. This is a limitation of the face detector.
-        return max(0.0, min(1.0, similarity))
     
     def batch_swap_faces(
         self,
