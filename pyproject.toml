@@ -48,12 +48,12 @@ dependencies = [
     "psutil>=5.9.0",  # Added for system monitoring
     "pywin32>=228; platform_system == 'Windows'",  # For Windows-specific functionality
     "pynvml>=11.5.0",  # For NVIDIA GPU detection
-    
+
     # Security & API
     "keyring>=24.0.0",  # Secure credential storage
     "cryptography>=41.0.0",  # Encryption for fallback storage
     "aiohttp>=3.9.0",  # Async HTTP for Civitai downloads
-    
+
     # New advanced features
     "websockets>=12.0",  # WebSocket server for real-time progress
     "python-socketio>=5.10.0",  # Socket.IO support
@@ -62,11 +62,18 @@ dependencies = [
     "onnxruntime>=1.16.0",  # For face swapping and InsightFace models
     "aria2p>=0.11.0",  # Fast downloads for Civitai
     
+    # FaceFusion 3.2.0 dependencies
+    "onnxruntime-gpu>=1.16.0; platform_system != 'Darwin'",  # GPU acceleration for non-Mac
+    "opencv-contrib-python>=4.8.0",  # Extended OpenCV features for FaceFusion
+    "insightface>=0.7.3",  # Latest InsightFace for better face detection
+    "gfpgan>=1.3.8",  # Face restoration models
+    "realesrgan>=0.3.0",  # Super resolution for face enhancement
+
     # Video generation placeholders (actual packages would be added when available)
     # "ltx-video>=0.1.0",  # LTX-Video model
     # "wan-video>=2.1.0",  # Wan 2.1 model
     # "skyreels>=0.1.0",  # SkyReels model
-    
+
     # Memory optimizations (optional for quick testing)
     # "xformers>=0.0.28; platform_system == 'Windows'",  # Windows-compatible xformers
     # "xformers>=0.0.22; platform_system == 'Linux'",    # Linux xformers
@@ -79,6 +86,17 @@ dev = [
     "ruff>=0.1.0",
     "jupyter>=1.0.0",
     "ipykernel>=6.25.0",
+]
+
+# FaceFusion advanced features
+facefusion = [
+    "torch>=2.1.0",  # Required for FaceFusion
+    "torchvision>=0.16.0",
+    "onnx>=1.15.0",
+    "protobuf>=4.21.0",
+    "tqdm>=4.65.0",
+    "psutil>=5.9.0",
+    "requests>=2.31.0",
 ]
 
 # Windows-specific optimizations

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...features.face_swap import FaceRestoreModel, BlendMode, FaceSwapParams
+from ...features.face_swap.facefusion_adapter import FaceFusionModel
 
 
 def create_face_swap_tab(app: Any) -> None:
@@ -38,33 +39,106 @@ def create_face_swap_tab(app: Any) -> None:
                     with gr.Accordion("Swap Settings", open=True):
                         source_face_index = gr.Number(
                             value=0,
-                            label="Source Face Index"
+                            label="Source Face Index",
+                            info="Which face to use from source image"
                         )
-                        gr.Markdown("*Which face to use from source (0 = first face)*")
+                        gr.Markdown("*💡 Check Face Detection Preview to see face indices*")
                         
                         target_face_index = gr.Number(
                             value=-1,
-                            label="Target Face Index"
+                            label="Target Face Index",
+                            info="Which face to replace (-1 = all faces)"
                         )
-                        gr.Markdown("*Which face to replace (-1 = all faces)*")
+                        gr.Markdown("*💡 Use specific index for better control*")
                         
                         similarity_threshold = gr.Slider(
                             minimum=0.0,
                             maximum=1.0,
-                            value=0.6,
+                            value=0.0,
                             step=0.1,
                             label="Face Similarity Threshold"
                         )
-                        gr.Markdown("*Only swap faces above this similarity*")
+                        gr.Markdown("*Only swap if faces are similar (0=swap all, 1=identical only)*")
                         
                         blend_mode = gr.Radio(
                             choices=["seamless", "hard", "soft", "poisson"],
                             value="seamless",
                             label="Blend Mode"
                         )
+                    
+                    # FaceFusion 2025 Options
+                    with gr.Accordion("🚀 FaceFusion 3.2.0 (2025 Features)", open=True):
+                        use_facefusion = gr.Checkbox(
+                            label="Enable FaceFusion 3.2.0",
+                            value=True,
+                            info="Use state-of-the-art 2025 face swapping technology"
+                        )
                         
-                    # Enhancement options
-                    with gr.Accordion("Enhancement Options", open=True):
+                        facefusion_model = gr.Dropdown(
+                            choices=[
+                                "inswapper_128",
+                                "hyperswap_1a_256", 
+                                "hyperswap_1b_256",
+                                "hyperswap_1c_256",
+                                "ghost_1_256",
+                                "ghost_2_256", 
+                                "ghost_3_256",
+                                "simswap_256",
+                                "simswap_unofficial_512",
+                                "blendswap_256",
+                                "uniface_256",
+                                "hififace_unofficial_256"
+                            ],
+                            value="inswapper_128",
+                            label="FaceFusion Model",
+                            info="Choose face swapping model (higher numbers = better quality)",
+                            visible=True
+                        )
+                        
+                        pixel_boost = gr.Dropdown(
+                            choices=["128x128", "256x256", "512x512"],
+                            value="256x256",
+                            label="Pixel Boost (2025)",
+                            info="Enhanced resolution processing for sharper results",
+                            visible=True
+                        )
+                        
+                        live_portrait = gr.Checkbox(
+                            label="Live Portrait Mode (2025)",
+                            value=False,
+                            info="Advanced expression preservation technology",
+                            visible=True
+                        )
+                        
+                        face_detector_score = gr.Slider(
+                            minimum=0.1,
+                            maximum=1.0,
+                            value=0.5,
+                            step=0.1,
+                            label="Face Detection Confidence",
+                            info="Minimum confidence for face detection",
+                            visible=True
+                        )
+                        
+                        gr.Markdown("*🎯 FaceFusion 3.2.0 provides superior quality and accuracy*")
+                        
+                        # Update visibility based on FaceFusion toggle
+                        def update_facefusion_visibility(enabled):
+                            return [
+                                gr.update(visible=enabled),  # facefusion_model
+                                gr.update(visible=enabled),  # pixel_boost
+                                gr.update(visible=enabled),  # live_portrait
+                                gr.update(visible=enabled),  # face_detector_score
+                            ]
+                        
+                        use_facefusion.change(
+                            update_facefusion_visibility,
+                            inputs=[use_facefusion],
+                            outputs=[facefusion_model, pixel_boost, live_portrait, face_detector_score]
+                        )
+                        
+                    # Enhancement options (Legacy)
+                    with gr.Accordion("🔧 Enhancement Options (Legacy)", open=False):
                         face_restore = gr.Checkbox(
                             label="Face Restoration",
                             value=True
@@ -167,8 +241,22 @@ def create_face_swap_tab(app: Any) -> None:
                     
                     # Face detection preview
                     with gr.Accordion("Face Detection Preview", open=False):
-                        detect_source_btn = gr.Button("Detect Source Faces")
-                        detect_target_btn = gr.Button("Detect Target Faces")
+                        with gr.Row():
+                            detect_source_btn = gr.Button("🔍 Detect Source Faces")
+                            detect_target_btn = gr.Button("🔍 Detect Target Faces")
+                        
+                        with gr.Row():
+                            source_preview = gr.Image(
+                                label="Source Face Preview",
+                                type="pil",
+                                interactive=False
+                            )
+                            target_preview = gr.Image(
+                                label="Target Face Preview", 
+                                type="pil",
+                                interactive=False
+                            )
+                        
                         detection_info = gr.HTML()
                         
         # Video Face Swap
@@ -357,55 +445,132 @@ def create_face_swap_tab(app: Any) -> None:
         outputs=[smoothing_window]
     )
     
-    # Face detection preview
-    def detect_faces(image, image_type):
-        """Detect and preview faces in an image"""
+    # Face detection preview with visualization
+    def detect_and_visualize_faces(image, image_type):
+        """Detect faces and return visualization with numbered boxes"""
         try:
             if not image:
-                return "<p>Please upload an image first</p>"
+                return None, "<p>Please upload an image first</p>"
+            
+            # Initialize models if needed
+            if not app.face_swap_manager.models_loaded:
+                success, msg = app.face_swap_manager.initialize_models()
+                if not success:
+                    return None, f"""
+                    <div style='padding: 10px; background: #ffebee; border-radius: 5px;'>
+                        <h4>Face Detection Models Not Found</h4>
+                        <p>Run <code>python download_face_swap_models.py</code> to download the required models.</p>
+                    </div>
+                    """
                 
             faces = app.face_swap_manager.detect_faces(image)
             
             if not faces:
-                return f"<p>No faces detected in {image_type} image</p>"
-                
-            info_html = f"<h4>Detected {len(faces)} face(s) in {image_type} image:</h4><ul>"
+                return image, f"<p>No faces detected in {image_type} image</p>"
             
-            for i, face in enumerate(faces):
-                info_html += f"""
-                <li>
-                    <strong>Face {i}:</strong>
-                    <ul>
-                        <li>Confidence: {face.det_score:.2%}</li>
-                        <li>Bounding Box: {face.bbox.astype(int).tolist()}</li>
-                        {f'<li>Age: ~{face.age}</li>' if face.age else ''}
-                        {f'<li>Gender: {face.gender}</li>' if face.gender else ''}
-                    </ul>
-                </li>
-                """
+            # Create visualization
+            import numpy as np
+            from PIL import ImageDraw, ImageFont
+            
+            # Create a copy to draw on
+            vis_img = image.copy()
+            draw = ImageDraw.Draw(vis_img)
+            
+            # Colors for different confidence levels
+            def get_color(score):
+                if score >= 0.8:
+                    return 'green'
+                elif score >= 0.6:
+                    return 'yellow'
+                elif score >= 0.5:
+                    return 'orange'
+                else:
+                    return 'red'
+            
+            # Sort faces by confidence for display
+            faces_with_idx = [(i, face) for i, face in enumerate(faces)]
+            faces_with_idx.sort(key=lambda x: x[1].det_score, reverse=True)
+            
+            info_html = f"<h4>Detected {len(faces)} face(s) in {image_type} image:</h4>"
+            info_html += "<table style='width: 100%; border-collapse: collapse;'>"
+            info_html += "<tr><th>Index</th><th>Confidence</th><th>Size</th><th>Quality</th></tr>"
+            
+            for idx, face in faces_with_idx:
+                bbox = face.bbox.astype(int)
+                x1, y1, x2, y2 = bbox
+                width = x2 - x1
+                height = y2 - y1
                 
-            info_html += "</ul>"
-            return info_html
+                # Determine face quality
+                aspect_ratio = width / height if height > 0 else 0
+                if width < 30 or height < 30:
+                    quality = "Too Small"
+                    quality_color = "#ff6b6b"
+                elif aspect_ratio < 0.5 or aspect_ratio > 2.0:
+                    quality = "Poor Aspect"
+                    quality_color = "#ffa94d"
+                elif face.det_score < 0.5:
+                    quality = "Low Confidence"
+                    quality_color = "#ffa94d"
+                else:
+                    quality = "Good"
+                    quality_color = "#51cf66"
+                
+                # Get color based on confidence
+                color = get_color(face.det_score)
+                
+                # Draw bounding box
+                draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
+                
+                # Draw index number
+                text = f"{idx}"
+                # Try to use a font
+                try:
+                    font = ImageFont.truetype("arial.ttf", max(20, min(40, height//5)))
+                except:
+                    font = None
+                
+                # Draw text background
+                text_bbox = draw.textbbox((x1+5, y1+5), text, font=font) if font else [x1+5, y1+5, x1+35, y1+35]
+                draw.rectangle(text_bbox, fill=color)
+                draw.text((x1+5, y1+5), text, fill='white', font=font)
+                
+                # Add to info table
+                info_html += f"""
+                <tr>
+                    <td style='text-align: center; font-weight: bold;'>{idx}</td>
+                    <td style='text-align: center; color: {color};'>{face.det_score:.1%}</td>
+                    <td style='text-align: center;'>{width}×{height}</td>
+                    <td style='text-align: center; color: {quality_color};'>{quality}</td>
+                </tr>
+                """
+            
+            info_html += "</table>"
+            info_html += "<p><small>💡 Use the index number to select which face to swap</small></p>"
+            
+            return vis_img, info_html
             
         except Exception as e:
-            return f"<p style='color: red;'>Error detecting faces: {str(e)}</p>"
+            import traceback
+            return image, f"<p style='color: red;'>Error detecting faces: {str(e)}</p><pre>{traceback.format_exc()}</pre>"
             
     detect_source_btn.click(
-        lambda img: detect_faces(img, "source"),
+        lambda img: detect_and_visualize_faces(img, "source"),
         inputs=[source_image],
-        outputs=[detection_info]
+        outputs=[source_preview, detection_info]
     )
     
     detect_target_btn.click(
-        lambda img: detect_faces(img, "target"),
+        lambda img: detect_and_visualize_faces(img, "target"),
         inputs=[target_image],
-        outputs=[detection_info]
+        outputs=[target_preview, detection_info]
     )
     
     # Main face swap function
     def swap_face_image(
         source_img, target_img, 
         source_idx, target_idx, similarity, blend,
+        use_ff, ff_model, pixel_boost_val, live_portrait_val, detector_score,
         restore, restore_model, fidelity, bg_enhance, upsample, upscale,
         preserve_expr, expr_weight, preserve_light, light_weight,
         preserve_age_val, age_weight_val
@@ -419,7 +584,22 @@ def create_face_swap_tab(app: Any) -> None:
             if not app.face_swap_manager.models_loaded:
                 success, msg = app.face_swap_manager.initialize_models()
                 if not success:
-                    return None, f"<p style='color: red;'>Failed to initialize models: {msg}</p>"
+                    error_html = f"""
+                    <div style='padding: 10px; background: #ffebee; border-radius: 5px;'>
+                        <h4>Face Swap Models Not Found</h4>
+                        <p>{msg}</p>
+                        <h5>To download the models automatically:</h5>
+                        <pre style='background: #f5f5f5; padding: 10px; border-radius: 3px;'>
+python download_face_swap_models.py</pre>
+                        <h5>Or download manually from:</h5>
+                        <ul>
+                            <li><a href="https://github.com/deepinsight/insightface/releases/tag/v0.7" target="_blank">InsightFace GitHub Releases</a></li>
+                            <li>Download: buffalo_l.zip (for face detection)</li>
+                            <li>Download: inswapper_128.onnx (for face swapping)</li>
+                        </ul>
+                    </div>
+                    """
+                    return None, error_html
                     
             # Create parameters
             params = FaceSwapParams(
@@ -427,6 +607,15 @@ def create_face_swap_tab(app: Any) -> None:
                 target_face_index=int(target_idx),
                 similarity_threshold=similarity,
                 blend_mode=BlendMode(blend),
+                
+                # FaceFusion 2025 options
+                use_facefusion=use_ff,
+                facefusion_model=FaceFusionModel(ff_model) if use_ff else FaceFusionModel.INSWAPPER_128,
+                pixel_boost=pixel_boost_val,
+                live_portrait=live_portrait_val,
+                face_detector_score=detector_score,
+                
+                # Legacy options
                 face_restore=restore,
                 face_restore_model=FaceRestoreModel[restore_model.upper()],
                 face_restore_fidelity=fidelity,
@@ -448,30 +637,68 @@ def create_face_swap_tab(app: Any) -> None:
                 params=params
             )
             
-            if result_img:
-                info_html = f"""
-                <div style='padding: 10px; background: #e8f5e9; border-radius: 5px;'>
-                    <h4>✅ Face Swap Successful!</h4>
-                    <ul>
-                        <li><strong>Source Faces:</strong> {info['source_faces']}</li>
-                        <li><strong>Target Faces:</strong> {info['target_faces']}</li>
-                        <li><strong>Swapped:</strong> {info['swapped_faces']} faces</li>
-                        <li><strong>Processing Time:</strong> {info['processing_time']}</li>
-                        <li><strong>Blend Mode:</strong> {info['parameters']['blend_mode']}</li>
-                        {f"<li><strong>Face Restoration:</strong> {info['parameters']['restore_model']}</li>" if info['parameters']['face_restore'] else ""}
-                    </ul>
-                </div>
-                """
-                return result_img, info_html
+            # Debug logging
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Face swap UI received: result_img={type(result_img)}, info={type(info)}")
+            if info:
+                logger.info(f"Info contents: {info}")
+            
+            if result_img is not None:
+                try:
+                    method = info.get('method', 'Unknown')
+                    is_facefusion = 'FaceFusion' in method
+                    
+                    method_emoji = "🚀" if is_facefusion else "🔧"
+                    method_bg = "#e3f2fd" if is_facefusion else "#e8f5e9"
+                    
+                    info_html = f"""
+                    <div style='padding: 10px; background: {method_bg}; border-radius: 5px;'>
+                        <h4>{method_emoji} Face Swap Successful! ({method})</h4>
+                        <ul>"""
+                    
+                    if is_facefusion:
+                        info_html += f"""
+                            <li><strong>Model:</strong> {info.get('model', 'N/A')}</li>
+                            <li><strong>Pixel Boost:</strong> {info.get('pixel_boost', 'N/A')}</li>
+                            <li><strong>Live Portrait:</strong> {'Yes' if info.get('live_portrait', False) else 'No'}</li>
+                            <li><strong>Detector:</strong> {info.get('detector', 'N/A')}</li>
+                            <li><strong>Processing Time:</strong> {info.get('processing_time', 0):.2f}s</li>
+                        """
+                    else:
+                        info_html += f"""
+                            <li><strong>Source Faces:</strong> {info.get('source_faces', 'N/A')}</li>
+                            <li><strong>Target Faces:</strong> {info.get('target_faces', 'N/A')}</li>
+                            <li><strong>Swapped:</strong> {info.get('swapped_faces', 'N/A')} faces</li>
+                            <li><strong>Processing Time:</strong> {info.get('processing_time', 0):.2f}s</li>
+                            <li><strong>Blend Mode:</strong> {info.get('parameters', {}).get('blend_mode', 'N/A')}</li>
+                            {f"<li><strong>Face Restoration:</strong> Enabled</li>" if info.get('parameters', {}).get('face_restore', False) else ""}
+                        """
+                    
+                    info_html += """
+                        </ul>
+                    </div>
+                    """
+                    return result_img, info_html
+                except Exception as e:
+                    logger.error(f"Error formatting success info: {e}")
+                    # Still return the image even if info formatting fails
+                    return result_img, "<div style='padding: 10px; background: #e8f5e9; border-radius: 5px;'><h4>Face Swap Successful!</h4></div>"
             else:
-                error_msg = info.get("error", "Unknown error")
+                if info is None:
+                    error_msg = "No information returned from face swap"
+                elif isinstance(info, dict):
+                    error_msg = info.get("error", "Unknown error occurred")
+                else:
+                    error_msg = str(info)
+                    
                 return None, f"<p style='color: red;'>Face swap failed: {error_msg}</p>"
                 
         except Exception as e:
             import traceback
             return None, f"""
             <div style='padding: 10px; background: #ffebee; border-radius: 5px;'>
-                <h4>❌ Error</h4>
+                <h4>Error</h4>
                 <p>{str(e)}</p>
                 <details>
                     <summary>Traceback</summary>
@@ -485,6 +712,7 @@ def create_face_swap_tab(app: Any) -> None:
         inputs=[
             source_image, target_image,
             source_face_index, target_face_index, similarity_threshold, blend_mode,
+            use_facefusion, facefusion_model, pixel_boost, live_portrait, face_detector_score,
             face_restore, face_restore_model, face_restore_fidelity,
             background_enhance, face_upsample, upscale_factor,
             preserve_expression, expression_weight,
@@ -511,7 +739,14 @@ def create_face_swap_tab(app: Any) -> None:
                 yield None, "<p>Initializing models...</p>", ""
                 success, msg = app.face_swap_manager.initialize_models()
                 if not success:
-                    yield None, "", f"<p style='color: red;'>Failed to initialize models: {msg}</p>"
+                    error_html = f"""
+                    <div style='padding: 10px; background: #ffebee; border-radius: 5px;'>
+                        <h4>Face Swap Models Not Found</h4>
+                        <p>{msg}</p>
+                        <p>Run <code>python download_face_swap_models.py</code> to download the required models.</p>
+                    </div>
+                    """
+                    yield None, "", error_html
                     return
                     
             # Create parameters based on quality
@@ -576,7 +811,7 @@ def create_face_swap_tab(app: Any) -> None:
             if success:
                 info_html = f"""
                 <div style='padding: 10px; background: #e8f5e9; border-radius: 5px;'>
-                    <h4>✅ Video Processing Complete!</h4>
+                    <h4>Video Processing Complete!</h4>
                     <ul>
                         <li><strong>Total Frames:</strong> {info['total_frames']}</li>
                         <li><strong>Processed:</strong> {info['processed_frames']} frames</li>
@@ -615,7 +850,14 @@ def create_face_swap_tab(app: Any) -> None:
             if not app.face_swap_manager.models_loaded:
                 success, msg = app.face_swap_manager.initialize_models()
                 if not success:
-                    return f"<p style='color: red;'>Failed to initialize models: {msg}</p>", [], gr.update()
+                    error_html = f"""
+                    <div style='padding: 10px; background: #ffebee; border-radius: 5px;'>
+                        <h4>Face Swap Models Not Found</h4>
+                        <p>{msg}</p>
+                        <p>Run <code>python download_face_swap_models.py</code> to download the required models.</p>
+                    </div>
+                    """
+                    return error_html, [], gr.update()
                     
             # Create parameters based on quality
             if quality == "fast":
@@ -680,7 +922,7 @@ def create_face_swap_tab(app: Any) -> None:
                         
                 progress_html = f"""
                 <div style='padding: 10px; background: #e8f5e9; border-radius: 5px;'>
-                    <h4>✅ Batch Processing Complete!</h4>
+                    <h4>Batch Processing Complete!</h4>
                     <p>Successfully processed {success_count}/{len(target_paths)} images</p>
                 </div>
                 """
