@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...features.face_swap import FaceRestoreModel, BlendMode, FaceSwapParams
-from ...features.face_swap.facefusion_adapter import FaceFusionModel
+from ...features.face_swap.facefusion_cli_adapter import FaceFusionModel
 
 
 def create_face_swap_tab(app: Any) -> None:

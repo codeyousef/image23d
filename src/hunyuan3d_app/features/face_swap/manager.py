@@ -16,7 +16,7 @@ try:
 except ImportError:
     torch = None
 
-from .facefusion_adapter import FaceFusionAdapter, FaceFusionConfig, FaceFusionModel
+from .facefusion_cli_adapter import FaceFusionCLIAdapter, FaceFusionConfig, FaceFusionModel
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ class FaceSwapManager:
         if not facefusion_path.exists():
             # Try absolute path from project root
             facefusion_path = Path(__file__).parent.parent.parent.parent.parent / "models" / "facefusion"
-        self.facefusion_adapter = FaceFusionAdapter(facefusion_path=facefusion_path)
+        self.facefusion_adapter = FaceFusionCLIAdapter(facefusion_path=facefusion_path)
         
         # FaceFusion loaded flag
         self.facefusion_loaded = False
