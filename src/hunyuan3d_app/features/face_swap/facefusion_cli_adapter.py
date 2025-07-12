@@ -5,6 +5,7 @@ import tempfile
 import logging
 import time
 import os
+import sys
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, Union, List
 from dataclasses import dataclass
@@ -119,17 +120,22 @@ class FaceFusionCLIAdapter:
             
             # Just check if the script can be executed (don't run full help which checks FFmpeg)
             try:
-                python_exec = "python"
+                python_exec = sys.executable
                 script_path = str(self.facefusion_script.absolute())
                 
                 # Test if we can import the script (basic validation)
                 result = subprocess.run([
                     python_exec, "-c", f"import sys; sys.path.insert(0, '{self.facefusion_path}'); import facefusion"
-                ], capture_output=True, text=True, timeout=15)
+                ], capture_output=True, text=True, timeout=15,
+                env=dict(os.environ, 
+                        PYTHONPATH=str(self.facefusion_path),
+                        FACEFUSION_SKIP_VALIDATION="1"))  # Skip validation during import
                 
                 if result.returncode != 0:
                     logger.warning(f"FaceFusion import test failed: {result.stderr}")
-                    # Don't fail completely - some import issues are expected
+                    # Don't fail completely - some import issues are expected during development
+                    if "FFMpeg" in result.stderr:
+                        logger.info("FFmpeg validation issue detected - will use runtime workarounds")
                 
                 logger.info("FaceFusion CLI validation completed")
                 
@@ -172,9 +178,10 @@ class FaceFusionCLIAdapter:
             target_path = self._save_temp_image(target_image, "target")
             output_path = self.temp_dir / f"output_{os.getpid()}_{int(time.time() * 1000)}.png"
             
-            # Build FaceFusion command
+            # Build FaceFusion command - use sys.executable to ensure same Python environment
+            # Try different command structures based on FaceFusion version
             cmd = [
-                "python", str(self.facefusion_script.absolute()),
+                sys.executable, str(self.facefusion_script.absolute()),
                 "headless-run",
                 "--source-paths", str(source_path),
                 "--target-path", str(target_path),
@@ -183,7 +190,10 @@ class FaceFusionCLIAdapter:
                 "--face-swapper-model", self.config.face_swapper_model.value,
                 "--face-detector-score", str(self.config.face_detector_score),
                 "--execution-providers", " ".join(self.config.execution_providers),
-                "--execution-thread-count", "1"
+                "--execution-thread-count", "1",
+                "--skip-validation",  # Skip FFmpeg validation for image processing
+                "--image-quality", "100",  # High quality output
+                "--output-image-quality", "100"  # Ensure high quality
             ]
             
             # Add pixel boost if specified
@@ -197,20 +207,109 @@ class FaceFusionCLIAdapter:
             
             logger.info(f"Running FaceFusion: {' '.join(cmd[:10])}...")
             
-            # Run FaceFusion
+            # Run FaceFusion with fallback approaches
             start_time = time.time()
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300  # 5 minute timeout
-            )
+            result = None
+            last_error = None
+            
+            # Try the main command first
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,  # 5 minute timeout
+                    cwd=str(self.facefusion_path),  # Run from FaceFusion directory
+                    env=dict(os.environ, PYTHONPATH=str(self.facefusion_path))  # Ensure Python can find modules
+                )
+                
+                # If it failed due to FFmpeg, try without skip-validation
+                if result.returncode != 0 and "FFMpeg" in result.stderr:
+                    logger.warning("First attempt failed due to FFmpeg, trying fallback approach...")
+                    
+                    # Remove problematic flags and try again
+                    fallback_cmd = [arg for arg in cmd if arg not in ["--skip-validation", "--image-quality", "--output-image-quality"]]
+                    
+                    result = subprocess.run(
+                        fallback_cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                        cwd=str(self.facefusion_path),
+                        env=dict(os.environ, 
+                               PYTHONPATH=str(self.facefusion_path),
+                               FACEFUSION_SKIP_VALIDATION="1")  # Try environment variable
+                    )
+                    
+                    if result.returncode != 0:
+                        logger.warning("Fallback also failed, trying minimal command...")
+                        
+                        # Try minimal command
+                        minimal_cmd = [
+                            sys.executable, str(self.facefusion_script.absolute()),
+                            "headless-run",
+                            "--source-paths", str(source_path),
+                            "--target-path", str(target_path),
+                            "--output-path", str(output_path),
+                        ]
+                        
+                        result = subprocess.run(
+                            minimal_cmd,
+                            capture_output=True,
+                            text=True,
+                            timeout=300,
+                            cwd=str(self.facefusion_path),
+                            env=dict(os.environ, 
+                                   PYTHONPATH=str(self.facefusion_path),
+                                   FACEFUSION_SKIP_FFMPEG="1",  # Try to skip FFmpeg entirely
+                                   FACEFUSION_HEADLESS="1")     # Force headless mode
+                        )
+                
+            except subprocess.TimeoutExpired as e:
+                last_error = e
+                result = None
             
             processing_time = time.time() - start_time
             
+            # Handle timeout case
+            if result is None and last_error:
+                return None, {"error": "Face swap timed out after 5 minutes"}
+            
             # Check if command succeeded
-            if result.returncode != 0:
-                error_msg = f"FaceFusion CLI failed: {result.stderr}"
+            if result is None or result.returncode != 0:
+                if result is None:
+                    error_msg = "FaceFusion command failed to execute"
+                else:
+                    stderr_output = result.stderr.strip()
+                    
+                    # Parse common error types and provide helpful messages
+                    if "FFMpeg is not installed" in stderr_output:
+                        import platform
+                        system = platform.system().lower()
+                        
+                        if system == "windows":
+                            error_msg = ("FFmpeg not found. For Windows:\n"
+                                       "🚀 Quick fix: winget install FFmpeg (as Administrator)\n"
+                                       "🔧 Manual: Download from https://www.gyan.dev/ffmpeg/builds/\n"
+                                       "📁 Extract to C:\\ffmpeg\\ and add C:\\ffmpeg\\bin to PATH\n"
+                                       "📋 Detailed guide: run 'python windows_ffmpeg_guide.py'\n"
+                                       "⚠️  MUST restart terminal/app after installation!")
+                        elif system == "darwin":
+                            error_msg = ("FFmpeg not found. For macOS: brew install ffmpeg")
+                        else:
+                            error_msg = ("FFmpeg not found. For Linux: sudo apt install ffmpeg")
+                            
+                        error_msg += "\n\nNote: For image-only face swapping, FFmpeg shouldn't be required. This might be a FaceFusion configuration issue."
+                    elif "No module named" in stderr_output:
+                        missing_module = stderr_output.split("No module named")[1].split("'")[1] if "'" in stderr_output else "unknown"
+                        error_msg = f"Missing Python dependency: {missing_module}. Install with: pip install {missing_module}"
+                    elif "CUDA" in stderr_output and "not available" in stderr_output:
+                        error_msg = "CUDA not available. FaceFusion will use CPU mode (slower but functional)"
+                    elif "models" in stderr_output.lower() and "download" in stderr_output.lower():
+                        error_msg = "FaceFusion models need to be downloaded. This happens automatically on first use."
+                    else:
+                        error_msg = f"FaceFusion CLI failed: {stderr_output}"
+                
                 logger.error(error_msg)
                 return None, {"error": error_msg}
             
