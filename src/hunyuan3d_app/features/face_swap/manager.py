@@ -100,6 +100,9 @@ class FaceSwapManager:
         
         # Initialize FaceFusion adapter (only method)
         facefusion_path = Path("./models/facefusion")
+        if not facefusion_path.exists():
+            # Try absolute path from project root
+            facefusion_path = Path(__file__).parent.parent.parent.parent.parent / "models" / "facefusion"
         self.facefusion_adapter = FaceFusionAdapter(facefusion_path=facefusion_path)
         
         # FaceFusion loaded flag

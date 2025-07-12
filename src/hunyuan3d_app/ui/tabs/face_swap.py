@@ -369,7 +369,7 @@ def create_face_swap_tab(app: Any) -> None:
                 return None, "<p>Please upload an image first</p>"
             
             # Initialize models if needed
-            if not app.face_swap_manager.models_loaded:
+            if not app.face_swap_manager.facefusion_loaded:
                 success, msg = app.face_swap_manager.initialize_models()
                 if not success:
                     return None, f"""
@@ -497,22 +497,24 @@ def create_face_swap_tab(app: Any) -> None:
                 return None, "<p style='color: red;'>Please upload both source and target images</p>"
                 
             # Initialize models if needed
-            if not app.face_swap_manager.models_loaded:
+            if not app.face_swap_manager.facefusion_loaded:
                 success, msg = app.face_swap_manager.initialize_models()
                 if not success:
                     error_html = f"""
                     <div style='padding: 10px; background: #ffebee; border-radius: 5px;'>
-                        <h4>Face Swap Models Not Found</h4>
-                        <p>{msg}</p>
-                        <h5>To download the models automatically:</h5>
-                        <pre style='background: #f5f5f5; padding: 10px; border-radius: 3px;'>
-python download_face_swap_models.py</pre>
-                        <h5>Or download manually from:</h5>
+                        <h4>🚀 FaceFusion 3.2.0 Initialization Failed</h4>
+                        <p><strong>Error:</strong> {msg}</p>
+                        <h5>🔧 Troubleshooting:</h5>
                         <ul>
-                            <li><a href="https://github.com/deepinsight/insightface/releases/tag/v0.7" target="_blank">InsightFace GitHub Releases</a></li>
-                            <li>Download: buffalo_l.zip (for face detection)</li>
-                            <li>Download: inswapper_128.onnx (for face swapping)</li>
+                            <li>Ensure FaceFusion is installed at: <code>models/facefusion/</code></li>
+                            <li>Check that required dependencies are installed:</li>
+                            <ul>
+                                <li><code>pip install onnx onnxruntime</code></li>
+                                <li><code>pip install opencv-python psutil</code></li>
+                            </ul>
+                            <li>FaceFusion models will download automatically on first use</li>
                         </ul>
+                        <p><strong>Note:</strong> This app uses FaceFusion 3.2.0 for state-of-the-art face swapping.</p>
                     </div>
                     """
                     return None, error_html
@@ -651,13 +653,13 @@ python download_face_swap_models.py</pre>
                 return None, "", "<p style='color: red;'>Please upload both source image and target video</p>"
                 
             # Initialize models if needed
-            if not app.face_swap_manager.models_loaded:
+            if not app.face_swap_manager.facefusion_loaded:
                 yield None, "<p>Initializing models...</p>", ""
                 success, msg = app.face_swap_manager.initialize_models()
                 if not success:
                     error_html = f"""
                     <div style='padding: 10px; background: #ffebee; border-radius: 5px;'>
-                        <h4>Face Swap Models Not Found</h4>
+                        <h4>🚀 FaceFusion 3.2.0 Not Ready</h4>
                         <p>{msg}</p>
                         <p>Run <code>python download_face_swap_models.py</code> to download the required models.</p>
                     </div>
@@ -763,12 +765,12 @@ python download_face_swap_models.py</pre>
                 return "", [], gr.update()
                 
             # Initialize models if needed
-            if not app.face_swap_manager.models_loaded:
+            if not app.face_swap_manager.facefusion_loaded:
                 success, msg = app.face_swap_manager.initialize_models()
                 if not success:
                     error_html = f"""
                     <div style='padding: 10px; background: #ffebee; border-radius: 5px;'>
-                        <h4>Face Swap Models Not Found</h4>
+                        <h4>🚀 FaceFusion 3.2.0 Not Ready</h4>
                         <p>{msg}</p>
                         <p>Run <code>python download_face_swap_models.py</code> to download the required models.</p>
                     </div>
