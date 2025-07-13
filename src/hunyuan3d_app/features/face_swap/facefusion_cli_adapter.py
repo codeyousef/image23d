@@ -307,6 +307,16 @@ class FaceFusionCLIAdapter:
                         error_msg = "CUDA not available. FaceFusion will use CPU mode (slower but functional)"
                     elif "models" in stderr_output.lower() and "download" in stderr_output.lower():
                         error_msg = "FaceFusion models need to be downloaded. This happens automatically on first use."
+                    elif "Processor face_swapper could not be loaded" in stderr_output:
+                        error_msg = ("Face swapper model could not be loaded. This usually means:\n"
+                                   "1. 🔄 Models are downloading on first use (may take several minutes)\n"
+                                   "2. 💾 Insufficient disk space for model files (~2-4GB needed)\n" 
+                                   "3. 🌐 Internet connection issue during model download\n"
+                                   "4. 🔧 Missing dependencies: pip install onnxruntime insightface\n"
+                                   "5. 📁 Model files corrupted - delete models folder to re-download\n"
+                                   "\n💡 Try waiting a few minutes for models to download, then retry.")
+                    elif "could not be loaded" in stderr_output:
+                        error_msg = f"Model loading failed: {stderr_output}\nTry deleting the models folder to force re-download."
                     else:
                         error_msg = f"FaceFusion CLI failed: {stderr_output}"
                 
@@ -376,6 +386,91 @@ class FaceFusionCLIAdapter:
             if hasattr(self.config, key):
                 setattr(self.config, key, value)
                 logger.info(f"Config updated: {key} = {value}")
+                
+    def download_models(self) -> Tuple[bool, str]:
+        """Pre-download FaceFusion models to avoid runtime issues
+        
+        Returns:
+            Tuple of (success, message)
+        """
+        if not self.initialized:
+            success, msg = self.initialize()
+            if not success:
+                return False, f"Cannot download models: {msg}"
+        
+        try:
+            logger.info("Starting FaceFusion model download...")
+            
+            # Use a simple command that forces model download
+            cmd = [
+                sys.executable, str(self.facefusion_script.absolute()),
+                "install-models",  # FaceFusion 3.2.0 install command
+                "--face-swapper-model", self.config.face_swapper_model.value
+            ]
+            
+            # Try the install command first
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10 minute timeout for model download
+                cwd=str(self.facefusion_path),
+                env=dict(os.environ, PYTHONPATH=str(self.facefusion_path))
+            )
+            
+            if result.returncode == 0:
+                logger.info("Model download completed successfully")
+                return True, "Models downloaded successfully"
+            else:
+                # If install-models doesn't exist, try a dry run to trigger download
+                logger.warning("install-models failed, trying dry-run approach...")
+                
+                # Create temp files for dry run
+                temp_source = self.temp_dir / "dummy_source.png"
+                temp_target = self.temp_dir / "dummy_target.png"
+                temp_output = self.temp_dir / "dummy_output.png"
+                
+                # Create minimal dummy images
+                from PIL import Image
+                dummy_img = Image.new('RGB', (256, 256), color='white')
+                dummy_img.save(temp_source)
+                dummy_img.save(temp_target)
+                
+                # Run a face swap command to trigger model download
+                dry_run_cmd = [
+                    sys.executable, str(self.facefusion_script.absolute()),
+                    "headless-run",
+                    "--source-paths", str(temp_source),
+                    "--target-path", str(temp_target),
+                    "--output-path", str(temp_output),
+                    "--processors", "face_swapper",
+                    "--face-swapper-model", self.config.face_swapper_model.value,
+                    "--skip-validation"
+                ]
+                
+                dry_result = subprocess.run(
+                    dry_run_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                    cwd=str(self.facefusion_path),
+                    env=dict(os.environ, PYTHONPATH=str(self.facefusion_path))
+                )
+                
+                # Clean up temp files
+                for temp_file in [temp_source, temp_target, temp_output]:
+                    temp_file.unlink(missing_ok=True)
+                
+                if dry_result.returncode == 0 or "download" in dry_result.stderr.lower():
+                    return True, "Models downloaded via dry-run method"
+                else:
+                    return False, f"Model download failed: {dry_result.stderr}"
+                    
+        except subprocess.TimeoutExpired:
+            return False, "Model download timed out (this can happen with slow internet)"
+        except Exception as e:
+            logger.error(f"Error downloading models: {e}")
+            return False, f"Model download error: {str(e)}"
     
     def _save_temp_image(self, 
                         image: Union[Image.Image, np.ndarray, str, Path],
