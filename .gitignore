@@ -16,13 +16,60 @@ __pycache__/
 /src/hunyuan3d_app/models/
 /.claude/
 /src/hunyuan3d_app.egg-info/
-/test_model_selection.py
-/test_direct_run.py
-/test_flux_model.py
-/test_flux_model_fix.py
-/test_flux_model_loading.py
-/test_image_generation.py
-/test_import.py
-/test_imports.py
 /outputs/
 Hunyuan3D/
+
+# Debug and test scripts
+debug_*.py
+test_*.py
+final_*.py
+validate_*.py
+verify_*.py
+visualize_*.py
+explore_*.py
+check_*.py
+monitor_*.py
+analyze_*.py
+
+# Installation and fix scripts
+install_*.py
+fix_*.py
+download_*.py
+setup_*.py
+run_*.py
+*.bat
+
+# Test images and results
+*_test_*.png
+synthetic_*.png
+direct_test_*.png
+manager_test_*.png
+test_face*.png
+test_source*.png
+test_target*.png
+test_result*.png
+test_bbox*.png
+
+# Backup and temporary files
+*.backup
+*.old
+*_corrupted
+*_backup_*
+*.tmp
+*.temp
+
+# Model directories (large files)
+models/3d/
+models/image/
+models/insightface/
+test_images/
+
+# Unused development files
+src/hunyuan3d_app/features/face_swap/pulid_adapter.py
+src/hunyuan3d_app/features/face_swap/simple_swap.py
+src/hunyuan3d_app/__main__.py
+pyproject.toml.backup
+
+# Development launchers
+run_app.py
+app_*.py
