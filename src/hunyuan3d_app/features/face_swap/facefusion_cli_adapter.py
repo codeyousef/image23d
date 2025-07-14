@@ -78,6 +78,19 @@ class FaceFusionCLIAdapter:
         
         # FaceFusion executable path
         self.facefusion_script = self.facefusion_path / "facefusion.py"
+
+    def _check_cuda(self) -> bool:
+        """Check if CUDA is available"""
+        try:
+            import torch
+            return torch.cuda.is_available()
+        except ImportError:
+            # If torch not available, check onnxruntime providers
+            try:
+                import onnxruntime as ort
+                return 'CUDAExecutionProvider' in ort.get_available_providers()
+            except ImportError:
+                return False
         
         # Debug: Log paths for troubleshooting
         logger.debug(f"FaceFusion path: {self.facefusion_path}")
@@ -179,7 +192,7 @@ class FaceFusionCLIAdapter:
             output_path = self.temp_dir / f"output_{os.getpid()}_{int(time.time() * 1000)}.png"
             
             # Build FaceFusion command - use sys.executable to ensure same Python environment
-            # Try different command structures based on FaceFusion version
+            # Use only valid FaceFusion 3.2.0 arguments
             cmd = [
                 sys.executable, str(self.facefusion_script.absolute()),
                 "headless-run",
@@ -189,11 +202,8 @@ class FaceFusionCLIAdapter:
                 "--processors", "face_swapper",
                 "--face-swapper-model", self.config.face_swapper_model.value,
                 "--face-detector-score", str(self.config.face_detector_score),
-                "--execution-providers", " ".join(self.config.execution_providers),
-                "--execution-thread-count", "1",
-                "--skip-validation",  # Skip FFmpeg validation for image processing
-                "--image-quality", "100",  # High quality output
-                "--output-image-quality", "100"  # Ensure high quality
+                "--execution-providers", "cpu",  # Default to CPU to avoid issues
+                "--execution-thread-count", "1"
             ]
             
             # Add pixel boost if specified
@@ -214,21 +224,38 @@ class FaceFusionCLIAdapter:
             
             # Try the main command first
             try:
+                # Enhanced environment for Windows/WSL compatibility
+                enhanced_env = dict(os.environ)
+                enhanced_env.update({
+                    'PYTHONPATH': str(self.facefusion_path),
+                    'FACEFUSION_SKIP_VALIDATION': '1',
+                    'FACEFUSION_SKIP_FFMPEG': '1',
+                    # Add local bin path for FFmpeg workaround
+                    'PATH': str(Path.home() / ".local" / "bin") + ":" + os.environ.get('PATH', '')
+                })
+                
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
                     timeout=300,  # 5 minute timeout
                     cwd=str(self.facefusion_path),  # Run from FaceFusion directory
-                    env=dict(os.environ, PYTHONPATH=str(self.facefusion_path))  # Ensure Python can find modules
+                    env=enhanced_env
                 )
                 
                 # If it failed due to FFmpeg, try without skip-validation
                 if result.returncode != 0 and "FFMpeg" in result.stderr:
                     logger.warning("First attempt failed due to FFmpeg, trying fallback approach...")
                     
-                    # Remove problematic flags and try again
-                    fallback_cmd = [arg for arg in cmd if arg not in ["--skip-validation", "--image-quality", "--output-image-quality"]]
+                    # Create fallback command with minimal arguments
+                    fallback_cmd = [
+                        sys.executable, str(self.facefusion_script.absolute()),
+                        "headless-run",
+                        "--source-paths", str(source_path),
+                        "--target-path", str(target_path),
+                        "--output-path", str(output_path),
+                        "--processors", "face_swapper"
+                    ]
                     
                     result = subprocess.run(
                         fallback_cmd,
@@ -236,21 +263,21 @@ class FaceFusionCLIAdapter:
                         text=True,
                         timeout=300,
                         cwd=str(self.facefusion_path),
-                        env=dict(os.environ, 
-                               PYTHONPATH=str(self.facefusion_path),
-                               FACEFUSION_SKIP_VALIDATION="1")  # Try environment variable
+                        env=enhanced_env  # Use same enhanced environment
                     )
                     
                     if result.returncode != 0:
                         logger.warning("Fallback also failed, trying minimal command...")
                         
-                        # Try minimal command
+                        # Try minimal command with just essential parameters
                         minimal_cmd = [
                             sys.executable, str(self.facefusion_script.absolute()),
                             "headless-run",
                             "--source-paths", str(source_path),
                             "--target-path", str(target_path),
                             "--output-path", str(output_path),
+                            "--processors", "face_swapper",
+                            "--face-swapper-model", "inswapper_128"
                         ]
                         
                         result = subprocess.run(
@@ -259,10 +286,7 @@ class FaceFusionCLIAdapter:
                             text=True,
                             timeout=300,
                             cwd=str(self.facefusion_path),
-                            env=dict(os.environ, 
-                                   PYTHONPATH=str(self.facefusion_path),
-                                   FACEFUSION_SKIP_FFMPEG="1",  # Try to skip FFmpeg entirely
-                                   FACEFUSION_HEADLESS="1")     # Force headless mode
+                            env=enhanced_env  # Use same enhanced environment
                         )
                 
             except subprocess.TimeoutExpired as e:

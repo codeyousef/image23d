@@ -136,6 +136,32 @@ class FaceSwapManager:
         except Exception as e:
             logger.error(f"Error initializing FaceFusion: {e}")
             return False, f"Error initializing FaceFusion: {str(e)}"
+            
+    def download_models(self) -> Tuple[bool, str]:
+        """Download FaceFusion models if not already present
+        
+        Returns:
+            Tuple of (success, message)
+        """
+        if not self.facefusion_loaded:
+            # Try to initialize first
+            success, msg = self.initialize_models()
+            if not success:
+                return False, f"Cannot download models: {msg}"
+        
+        try:
+            logger.info("Downloading FaceFusion models...")
+            success, msg = self.facefusion_adapter.download_models()
+            if success:
+                logger.info("Model download completed")
+                return True, msg
+            else:
+                logger.error(f"Model download failed: {msg}")
+                return False, msg
+                
+        except Exception as e:
+            logger.error(f"Error downloading models: {e}")
+            return False, f"Model download error: {str(e)}"
     
     def swap_face(
         self,
@@ -175,7 +201,7 @@ class FaceSwapManager:
                 'face_swapper_model': params.facefusion_model.value,
                 'face_detector_score': params.face_detector_score,
                 'face_swapper_pixel_boost': params.pixel_boost,
-                'execution_providers': ['cuda'] if torch and torch.cuda.is_available() else ['cpu']
+                'execution_providers': 'cuda' if torch and torch.cuda.is_available() else 'cpu'
             }
             
             # Apply live portrait if enabled (2025 feature)
