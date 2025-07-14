@@ -7,7 +7,7 @@ import tempfile
 # --- Paths ---
 # Use absolute paths based on the project directory
 PROJECT_DIR = Path(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-MODELS_DIR = PROJECT_DIR / "cache/models"
+MODELS_DIR = PROJECT_DIR / "models"
 OUTPUT_DIR = PROJECT_DIR / "outputs"
 CACHE_DIR = PROJECT_DIR / "cache/data"
 TEMP_DIR = PROJECT_DIR / "cache/temp"

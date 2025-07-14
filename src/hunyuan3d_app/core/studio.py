@@ -379,7 +379,7 @@ class Hunyuan3DStudio:
                 
                 result_text += "</ul>"
                 result_text += "<p><strong>Note:</strong> These are duplicate files that exist in multiple locations. "
-                result_text += "You can safely delete them from the HuggingFace cache or src/models directories if the models are working correctly from the cache/models directory.</p>"
+                result_text += "You can safely delete them from the HuggingFace cache or src/models directories if the models are working correctly from the models directory.</p>"
                 result_text += "</div>"
                 
                 return result_text

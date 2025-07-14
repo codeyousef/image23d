@@ -66,15 +66,41 @@ class GenerationJob:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
-        data = asdict(self)
-        data['priority'] = self.priority.name
-        data['status'] = self.status.name
+        # Custom serialization to handle PIL Images in params
+        data = {
+            'id': self.id,
+            'type': self.type,
+            'priority': self.priority.name,
+            'status': self.status.name,
+            'created_at': self.created_at,
+            'started_at': self.started_at,
+            'completed_at': self.completed_at,
+            'error': self.error,
+            'progress': self.progress,
+            'progress_message': self.progress_message,
+            'metadata': self.metadata
+        }
+        
+        # Handle params serialization
+        serialized_params = {}
+        for key, value in self.params.items():
+            if hasattr(value, 'save') and hasattr(value, 'format'):
+                # Skip PIL Images in params - they're not needed for history
+                serialized_params[f'{key}_type'] = 'PIL.Image'
+            else:
+                try:
+                    import json
+                    json.dumps(value)  # Test if serializable
+                    serialized_params[key] = value
+                except (TypeError, ValueError):
+                    serialized_params[key] = str(value)
+        data['params'] = serialized_params
         
         # Handle result serialization - PIL Images can't be serialized to JSON
         if self.result and isinstance(self.result, dict):
             serialized_result = {}
             for key, value in self.result.items():
-                if key == 'image' and hasattr(value, 'save'):
+                if hasattr(value, 'save') and hasattr(value, 'format'):
                     # Save PIL Image to file and store path instead
                     try:
                         from pathlib import Path
@@ -83,7 +109,7 @@ class GenerationJob:
                         
                         # Create temp file for the image
                         temp_dir = Path(tempfile.gettempdir()) / "hunyuan3d_job_images"
-                        temp_dir.mkdir(exist_ok=True)
+                        temp_dir.mkdir(parents=True, exist_ok=True)
                         
                         image_path = temp_dir / f"job_{self.id}_{key}_{uuid.uuid4().hex[:8]}.png"
                         value.save(image_path)
@@ -246,10 +272,14 @@ class QueueManager:
         """Save job to history"""
         try:
             history_file = self.job_history_dir / f"{job.id}.json"
+            job_dict = job.to_dict()
             with open(history_file, 'w') as f:
-                json.dump(job.to_dict(), f, indent=2)
+                json.dump(job_dict, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving job history: {e}")
+            logger.debug(f"Job type: {job.type}, Job status: {job.status}")
+            if job.result:
+                logger.debug(f"Result keys: {list(job.result.keys()) if isinstance(job.result, dict) else type(job.result)}")
             
     def register_handler(self, job_type: str, handler: Callable):
         """Register a handler for a job type

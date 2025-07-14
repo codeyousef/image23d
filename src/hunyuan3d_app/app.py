@@ -25,39 +25,34 @@ else:
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Initialize GPU optimizations early
-logger.info("Initializing GPU optimizations...")
-gpu_optimizer = get_gpu_optimizer()
+def main():
+    """Main entry point for the application"""
+    # Initialize GPU optimizations early
+    logger.info("Initializing GPU optimizations...")
+    gpu_optimizer = get_gpu_optimizer()
 
-# Create the enhanced app
-app = Hunyuan3DStudioEnhanced()
+    # Create the enhanced app
+    app = Hunyuan3DStudioEnhanced()
 
-# Check system requirements
-if __name__ == "__main__":
-    # When run directly, use absolute imports
+    # Check system requirements
     from hunyuan3d_app.utils.system import check_system_requirements
-else:
-    # When imported as a module, use relative imports
-    from .utils.system import check_system_requirements
-sys_req = check_system_requirements()
-if sys_req["overall_status"] == "error":
-    logger.warning("System does not meet minimum requirements:")
-    for error in sys_req["errors"]:
-        logger.warning(f"- {error}")
-    logger.info("See the System Requirements tab for details and recommendations.")
-elif sys_req["overall_status"] == "warning":
-    logger.warning("System meets minimum but not recommended requirements:")
-    for warning in sys_req["warnings"]:
-        logger.warning(f"- {warning}")
-    logger.info("See the System Requirements tab for details and recommendations.")
-else:
-    logger.info("System meets all recommended requirements.")
+    sys_req = check_system_requirements()
+    if sys_req["overall_status"] == "error":
+        logger.warning("System does not meet minimum requirements:")
+        for error in sys_req["errors"]:
+            logger.warning(f"- {error}")
+        logger.info("See the System Requirements tab for details and recommendations.")
+    elif sys_req["overall_status"] == "warning":
+        logger.warning("System meets minimum but not recommended requirements:")
+        for warning in sys_req["warnings"]:
+            logger.warning(f"- {warning}")
+        logger.info("See the System Requirements tab for details and recommendations.")
+    else:
+        logger.info("System meets all recommended requirements.")
 
-if __name__ == "__main__":
     # Create enhanced interface only when run directly
     interface = create_enhanced_interface(app)
     # Get port from environment variable or use a range of ports
-    import os
     import socket
 
     # Try to get port from environment variable
@@ -97,3 +92,6 @@ if __name__ == "__main__":
         inbrowser=True,
         allowed_paths=allowed_paths
     )
+
+if __name__ == "__main__":
+    main()
