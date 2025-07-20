@@ -170,12 +170,12 @@ class ProgressStreamManager:
             
         logger.info("WebSocket server stopped")
         
-    async def handle_client(self, websocket: WebSocketServerProtocol, path: str):
+    async def handle_client(self, websocket: WebSocketServerProtocol, path: str = "/"):
         """Handle a new client connection"""
         self.clients.add(websocket)
         client_id = str(uuid.uuid4())[:8]
         
-        logger.info(f"Client {client_id} connected from {websocket.remote_address}")
+        logger.info(f"Client {client_id} connected from {websocket.remote_address} at path {path}")
         
         try:
             # Send initial state

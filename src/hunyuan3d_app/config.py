@@ -527,3 +527,144 @@ WEBSOCKET_CONFIG = {
     "heartbeat_interval": 30,
     "message_retention": 60  # seconds
 }
+
+# --- FLUX Production Pipeline Configurations ---
+FLUX_PIPELINE_CONFIG = {
+    "default_model": "black-forest-labs/FLUX.1-dev",
+    "cache_enabled": True,
+    "cache_dir": "cache/flux_cache",
+    
+    # Quality presets for FLUX
+    "quality_settings": {
+        "low": {
+            "steps": 15,
+            "guidance_scale": 3.0,
+            "use_acceleration": True,
+            "compile_model": False
+        },
+        "medium": {
+            "steps": 20,
+            "guidance_scale": 3.5,
+            "use_acceleration": True,
+            "compile_model": False
+        },
+        "high": {
+            "steps": 28,
+            "guidance_scale": 3.5,
+            "use_acceleration": False,
+            "compile_model": True
+        },
+        "ultra": {
+            "steps": 40,
+            "guidance_scale": 4.0,
+            "use_acceleration": False,
+            "compile_model": True
+        }
+    },
+    
+    # Style configurations
+    "style_configs": {
+        "photorealistic": {
+            "prompt_suffix": ", photorealistic, high detail, professional photography",
+            "guidance_scale": 3.5,
+            "sampler": "heun"
+        },
+        "artistic": {
+            "prompt_suffix": ", artistic, painted, stylized",
+            "guidance_scale": 4.5,
+            "sampler": "deis"
+        },
+        "anime": {
+            "prompt_suffix": ", anime style, manga, detailed",
+            "guidance_scale": 4.0,
+            "sampler": "deis"
+        },
+        "3d_render": {
+            "prompt_suffix": ", 3d render, octane render, unreal engine",
+            "guidance_scale": 3.5,
+            "sampler": "heun"
+        }
+    },
+    
+    # Acceleration settings
+    "acceleration": {
+        "hyperflux": {
+            "enabled": True,
+            "optimal_steps": 8,
+            "step_range": (4, 16)
+        },
+        "fluxturbo": {
+            "enabled": True,
+            "optimal_steps": 6,
+            "step_range": (4, 9)
+        }
+    },
+    
+    # Memory optimization thresholds
+    "memory_optimization": {
+        "auto_enable_threshold_gb": 12,
+        "vae_slicing_threshold_gb": 8,
+        "cpu_offload_threshold_gb": 6
+    },
+    
+    # Enhancement settings
+    "enhancement": {
+        "auto_enhance": True,
+        "face_restoration": True,
+        "upscale_models": {
+            "realesrgan": "RealESRGAN_x4plus.pth",
+            "gfpgan": "GFPGANv1.4.pth"
+        }
+    }
+}
+
+# --- FLUX ControlNet Configurations ---
+FLUX_CONTROLNET_CONFIG = {
+    "models": {
+        "depth": {
+            "model_id": "diffusers/controlnet-depth-flux-1-dev",
+            "preprocessor": "midas",
+            "optimal_strength": 1.2
+        },
+        "canny": {
+            "model_id": "diffusers/controlnet-canny-flux-1-dev",
+            "preprocessor": "canny",
+            "optimal_strength": 1.0
+        },
+        "pose": {
+            "model_id": "diffusers/controlnet-openpose-flux-1-dev",
+            "preprocessor": "openpose",
+            "optimal_strength": 1.0
+        }
+    },
+    
+    "3d_generation": {
+        "primary_control": "depth",
+        "secondary_control": "canny",
+        "multi_control_weight": 0.7
+    }
+}
+
+# --- FLUX Model Variants ---
+FLUX_MODEL_VARIANTS = {
+    "base": {
+        "model_id": "black-forest-labs/FLUX.1-dev",
+        "precision": "bfloat16",
+        "vram_required_gb": 24
+    },
+    "gguf_q8": {
+        "model_id": "city96/FLUX.1-dev-gguf",
+        "quantization": "Q8_0",
+        "vram_required_gb": 14
+    },
+    "gguf_q6": {
+        "model_id": "city96/FLUX.1-dev-gguf",
+        "quantization": "Q6_K",
+        "vram_required_gb": 11.5
+    },
+    "gguf_q4": {
+        "model_id": "city96/FLUX.1-dev-gguf",
+        "quantization": "Q4_K_S",
+        "vram_required_gb": 8
+    }
+}

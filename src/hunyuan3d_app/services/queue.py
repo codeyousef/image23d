@@ -152,8 +152,9 @@ class QueueManager:
         self.max_workers = max_workers
         self.max_queue_size = max_queue_size
         
-        # Job storage
+        # Job storage with thread-safe lock
         self.jobs: Dict[str, GenerationJob] = {}
+        self.jobs_lock = threading.Lock()  # Add lock for thread-safe access
         self.job_queue = PriorityQueue(maxsize=max_queue_size)
         self.active_jobs: Dict[str, GenerationJob] = {}
         
@@ -221,6 +222,11 @@ class QueueManager:
             def update_progress(progress: float, message: str = ""):
                 job.progress = progress
                 job.progress_message = message
+                logger.debug(f"Job {job.id} progress updated: {progress:.2f} - {message}")
+                
+                # Update the job in storage with thread safety
+                with self.jobs_lock:
+                    self.jobs[job.id] = job
                 
                 # Call registered progress callback
                 if job.id in self.progress_callbacks:
@@ -263,6 +269,10 @@ class QueueManager:
             
             # Set progress to 1.0 only after everything is complete
             job.progress = 1.0
+            
+            # Update the job in storage with thread safety
+            with self.jobs_lock:
+                self.jobs[job.id] = job
             
             # Call final progress update
             if job.id in self.progress_callbacks:
@@ -318,8 +328,9 @@ class QueueManager:
             metadata=metadata or {}
         )
         
-        # Store job
-        self.jobs[job.id] = job
+        # Store job with thread safety
+        with self.jobs_lock:
+            self.jobs[job.id] = job
         
         # Add to queue
         self.job_queue.put(job)
@@ -350,25 +361,27 @@ class QueueManager:
         
     def get_job(self, job_id: str) -> Optional[GenerationJob]:
         """Get a job by ID"""
-        return self.jobs.get(job_id)
+        with self.jobs_lock:
+            return self.jobs.get(job_id)
         
     def get_queue_status(self) -> Dict[str, Any]:
         """Get current queue status"""
-        pending_jobs = [
-            job for job in self.jobs.values()
-            if job.status == JobStatus.PENDING
-        ]
-        
-        return {
-            "total_jobs": len(self.jobs),
-            "pending": len(pending_jobs),
-            "active": len(self.active_jobs),
-            "completed": len([j for j in self.jobs.values() if j.status == JobStatus.COMPLETED]),
-            "failed": len([j for j in self.jobs.values() if j.status == JobStatus.FAILED]),
-            "queue_size": self.job_queue.qsize(),
-            "max_workers": self.max_workers,
-            "active_workers": len([w for w in self.workers if w.is_alive()])
-        }
+        with self.jobs_lock:
+            pending_jobs = [
+                job for job in self.jobs.values()
+                if job.status == JobStatus.PENDING
+            ]
+            
+            return {
+                "total_jobs": len(self.jobs),
+                "pending": len(pending_jobs),
+                "active": len(self.active_jobs),
+                "completed": len([j for j in self.jobs.values() if j.status == JobStatus.COMPLETED]),
+                "failed": len([j for j in self.jobs.values() if j.status == JobStatus.FAILED]),
+                "queue_size": self.job_queue.qsize(),
+                "max_workers": self.max_workers,
+                "active_workers": len([w for w in self.workers if w.is_alive()])
+            }
         
     def cancel_job(self, job_id: str) -> bool:
         """Cancel a pending job

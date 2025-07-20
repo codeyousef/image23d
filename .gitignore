@@ -13,7 +13,11 @@ __pycache__/
 /cache/temp/
 /src/cache/
 /src/hunyuan3d_app/cache/
-/src/hunyuan3d_app/models/
+# Model weight files only
+/src/hunyuan3d_app/models/*.pth
+/src/hunyuan3d_app/models/*.safetensors
+/src/hunyuan3d_app/models/*.bin
+/src/hunyuan3d_app/models/*.ckpt
 /.claude/
 /src/hunyuan3d_app.egg-info/
 /outputs/
@@ -62,6 +66,7 @@ test_bbox*.png
 models/3d/
 models/image/
 models/insightface/
+models/facefusion/
 test_images/
 
 # Unused development files
@@ -73,3 +78,70 @@ pyproject.toml.backup
 # Development launchers
 run_app.py
 app_*.py
+/docs/private/
+
+# Temporary directories
+/cache/temp/
+/cache/data/thumbnails/
+/cache/data/video/
+/cache/faceswap/
+/temp/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Summary and guide files from development
+*_SUMMARY.md
+*_IMPLEMENTATION*.md
+MEMORY_OPTIMIZATION_SUMMARY.md
+IMPROVED_ERROR_HANDLING_SUMMARY.md
+
+# Python egg-info directories
+*.egg-info/
+/src/hunyuan3d_app.egg-info/
+/Hunyuan3D/hunyuan3d.egg-info/
+
+# Test output and temporary test files
+test_output/
+pytest_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+*.cover
+
+# IDE and editor files
+.vscode/
+.vs/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment files
+.env.local
+.env.*.local
+
+# Log files
+*.log
+logs/
+
+# Build artifacts
+dist/
+build/
+*.whl
+
+# Jupyter notebooks
+*.ipynb_checkpoints/
+.ipynb_checkpoints/
+
+# Documentation build files
+docs/_build/
+docs/_static/
+docs/_templates/

@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 def main():
     """Main entry point for the application"""
+    # Set up memory optimization environment variables FIRST
+    from hunyuan3d_app.utils.memory_optimization import setup_flux_memory_optimization
+    logger.info("Setting up FLUX memory optimization...")
+    memory_manager = setup_flux_memory_optimization()
+    
     # Initialize GPU optimizations early
     logger.info("Initializing GPU optimizations...")
     gpu_optimizer = get_gpu_optimizer()

@@ -2,6 +2,7 @@ import logging
 import threading
 import queue
 import time
+from functools import partial
 from pathlib import Path
 from typing import Tuple, Optional, Any, Dict, Callable
 
@@ -14,6 +15,12 @@ from transformers import pipeline
 from ..utils.performance import get_performance_monitor, profile_generation
 from ..utils.memory import get_memory_manager
 from ..models.gguf import GGUFModelManager, GGUFModelInfo
+from ..models.flux_production import (
+    ProductionFluxPipeline,
+    GenerationRequest,
+    GenerationResult,
+    create_production_pipeline
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +35,8 @@ class ImageGenerator:
         self.output_dir = output_dir
         self.background_remover = None
         self.stop_generation_flag = False
-        self.gguf_manager = GGUFModelManager(cache_dir="models/gguf")
+        self.gguf_manager = GGUFModelManager(cache_dir="image_models/gguf")
+        self.flux_pipeline = None  # Will be created when needed
 
     def stop_generation(self):
         """Stop the current generation process"""
@@ -44,16 +52,61 @@ class ImageGenerator:
         try:
             if not self.background_remover:
                 self.background_remover = pipeline("image-segmentation",
-                                                   model="briaai/RMBG-1.4",
+                                                   image_model="briaai/RMBG-1.4",
                                                    trust_remote_code=True,
                                                    device=self.device)
 
             # Remove background
-            result = self.background_remover([image])
-            return result[0]['mask']
+            result = self.background_remover(image)
+            
+            # The result should be an image with transparent background
+            # If it's a dict with 'mask', we need to apply the mask
+            if isinstance(result, dict) and 'mask' in result:
+                from PIL import Image
+                import numpy as np
+                
+                # Convert to RGBA
+                if image.mode != 'RGBA':
+                    image = image.convert('RGBA')
+                
+                # Apply mask
+                mask = result['mask']
+                if isinstance(mask, Image.Image):
+                    mask = np.array(mask)
+                
+                # Create alpha channel from mask
+                img_array = np.array(image)
+                img_array[:, :, 3] = mask
+                
+                return Image.fromarray(img_array, 'RGBA')
+            elif isinstance(result, list) and len(result) > 0:
+                # Handle list of results
+                if isinstance(result[0], dict) and 'mask' in result[0]:
+                    mask = result[0]['mask']
+                    # Apply mask as above
+                    from PIL import Image
+                    import numpy as np
+                    
+                    if image.mode != 'RGBA':
+                        image = image.convert('RGBA')
+                    
+                    if isinstance(mask, Image.Image):
+                        mask = np.array(mask)
+                    
+                    img_array = np.array(image)
+                    img_array[:, :, 3] = mask
+                    
+                    return Image.fromarray(img_array, 'RGBA')
+                else:
+                    # Return first result if it's an image
+                    return result[0]
+            else:
+                # Return the result as-is
+                return result
 
         except Exception as e:
             logger.error(f"Error removing background: {str(e)}")
+            logger.warning("Returning original image without background removal")
             return image
 
     @profile_generation
@@ -71,6 +124,15 @@ class ImageGenerator:
             progress
     ):
         """Generate an image from text prompt using a background thread"""
+        
+        # Check if image_model is loaded
+        if image_model is None:
+            logger.error("No image model loaded")
+            return None, "❌ No image model loaded"
+            
+        logger.info(f"[IMAGE_GENERATOR] Starting generation with model: {type(image_model).__name__}")
+        logger.info(f"[IMAGE_GENERATOR] Model name: {image_model_name}")
+        logger.info(f"[IMAGE_GENERATOR] Is GGUF: {getattr(image_model, '_is_gguf_model', False)}")
 
         # Reset stop flag at the beginning of generation
         self.reset_stop_flag()
@@ -83,15 +145,35 @@ class ImageGenerator:
             # Use 2**31 - 1 as the upper bound to avoid int32 overflow in numpy
             seed = np.random.randint(0, 2147483647)
 
+        # Check model type for callback
+        image_model_type = type(image_model).__name__
+        is_flux_pipeline = "FluxPipeline" in image_model_type
+        is_gguf_wrapped = hasattr(image_model, '_is_gguf_model') and image_model._is_gguf_model
+        
         # Define callback function for real-time progress updates
         def progress_callback(pipe, step_index, timestep, callback_kwargs):
+            # Log callback invocation
+            logger.debug(f"Progress callback: step {step_index}/{steps}, timestep: {timestep}")
+            
             # Update the current step in the result container
             result_container["current_step"] = step_index
             
             # Call the external progress callback if provided
             if progress:
                 progress_value = (step_index + 1) / steps
-                progress(progress_value, f"Step {step_index + 1}/{steps}")
+                progress_msg = f"Step {step_index + 1}/{steps}"
+                
+                # Add memory info for FLUX models periodically
+                if (is_flux_pipeline or is_gguf_wrapped) and (step_index + 1) % 5 == 0:
+                    try:
+                        from ..utils.memory_optimization import get_memory_manager
+                        memory_manager = get_memory_manager()
+                        free_vram = memory_manager.get_available_memory()
+                        progress_msg += f" (VRAM: {free_vram:.1f}GB free)"
+                    except:
+                        pass  # Don't fail on memory check
+                
+                progress(progress_value, progress_msg)
 
             # Check if generation should be stopped
             if self.stop_generation_flag:
@@ -105,40 +187,57 @@ class ImageGenerator:
         def generate_in_background():
             start_time = time.time()
             try:
+                # Don't need to capture - just use the closure variables directly
+                
                 # Check if this is a GGUF model
                 if hasattr(image_model, '_is_gguf_model') and image_model._is_gguf_model:
                     logger.info(f"Using GGUF model for generation: {image_model_name}")
+                    logger.info(f"GGUF model type: {type(image_model).__name__}")
+                    logger.info(f"Has _real_pipeline: {hasattr(image_model, '_real_pipeline') and image_model._real_pipeline is not None}")
+                    logger.info(f"Is placeholder: {getattr(image_model, '_is_placeholder', 'unknown')}")
                     # GGUF models are already properly configured through the pipeline
+                    # Q8 models are much smaller and don't need special handling
                 
                 # Acquire lock to ensure thread safety
                 with generation_lock:
                     # Create generator with seed
-                    # Check if the model has a specific device or is using device_map
-                    try:
-                        if hasattr(image_model, 'device') and image_model.device != torch.device("meta"):
-                            # Use the model's device for the generator
-                            generator_device = image_model.device
-                        else:
-                            # Fall back to the default device
-                            generator_device = self.device
-
-                        # For FluxPipeline models, check if we can use GPU generator
-                        model_type = type(image_model).__name__
-                        if "FluxPipeline" in model_type:
-                            # Try to use GPU generator if model is on GPU
-                            if generator_device == "cuda":
-                                logger.info("FluxPipeline detected, attempting to use GPU generator")
+                    # Check if the image_model has a specific device or is using device_map
+                    generator = None
+                    use_generator = True
+                    
+                    # Check if image_model uses device_map (for multi-device image_models)
+                    has_device_map = hasattr(image_model, 'hf_device_map') and image_model.hf_device_map
+                    image_model_type = type(image_model).__name__
+                    is_flux_image_model = "Flux" in image_model_type or "flux" in image_model_name.lower()
+                    
+                    # For FLUX image_models or image_models with device_map, don't use generator
+                    if is_flux_image_model or has_device_map:
+                        logger.info(f"Model type '{image_model_type}' with device_map={has_device_map}, skipping generator creation")
+                        use_generator = False
+                        generator = None
+                        
+                        # For reproducibility, set global seed instead
+                        if seed != -1:
+                            torch.manual_seed(seed)
+                            if torch.cuda.is_available():
+                                torch.cuda.manual_seed_all(seed)
+                            logger.info(f"Set global torch seed to {seed} for FLUX/device_map image_model")
+                    else:
+                        try:
+                            # For single-device image_models, create generator on the image_model's device
+                            if hasattr(image_model, 'device') and image_model.device != torch.device("meta"):
+                                generator_device = image_model.device
                             else:
-                                logger.info("FluxPipeline detected, using CPU generator")
-                                generator_device = "cpu"
-
-                        generator = torch.Generator(generator_device).manual_seed(seed)
-                        logger.info(f"Created generator on device: {generator_device}")
-                    except Exception as gen_error:
-                        logger.warning(f"Error creating generator with specific device: {str(gen_error)}")
-                        # Fall back to default generator without specifying device
-                        generator = torch.Generator().manual_seed(seed)
-                        logger.info("Created generator with default device")
+                                generator_device = self.device
+                            
+                            generator = torch.Generator(generator_device).manual_seed(seed)
+                            logger.info(f"Created generator on device: {generator_device}")
+                            
+                        except Exception as gen_error:
+                            logger.warning(f"Error creating generator: {str(gen_error)}")
+                            # Skip generator for safety
+                            use_generator = False
+                            generator = None
 
                     # Free up memory before generation
                     import gc
@@ -149,74 +248,256 @@ class ImageGenerator:
                     with torch.no_grad():
                         try:
                             # Generate the image with callback for progress updates
-                            # Check if the model is a FluxPipeline or mock pipeline
-                            model_type = type(image_model).__name__
-                            is_flux_pipeline = "FluxPipeline" in model_type
-                            is_mock_pipeline = "Mock" in model_type
-                            logger.info(f"Model type: {model_type}, is FluxPipeline: {is_flux_pipeline}")
+                            # Check if the image_model is a FluxPipeline or FLUX model
+                            image_model_type = type(image_model).__name__
+                            is_flux_pipeline = "FluxPipeline" in image_model_type
+                            is_flux_model = (is_flux_pipeline or 
+                                           "flux" in image_model_name.lower() or 
+                                           "FLUX" in image_model_name or
+                                           (hasattr(image_model, '_is_gguf_model') and 
+                                            image_model._is_gguf_model and 
+                                            "flux" in str(getattr(image_model, 'model_name', '')).lower()))
+                            logger.info(f"Model type: {image_model_type}, is FLUX: {is_flux_model}")
 
-                            if is_mock_pipeline:
-                                # Handle mock pipelines differently
-                                logger.info("Using mock pipeline - generating test image")
-                                result = image_model(
+                            # Check if we already have a loaded GGUF model - don't create new pipeline
+                            is_loaded_gguf = (hasattr(image_model, '_is_gguf_model') and 
+                                            image_model._is_gguf_model and
+                                            hasattr(image_model, '_real_pipeline') and 
+                                            image_model._real_pipeline is not None)
+                            
+                            logger.info(f"GGUF check - is_loaded_gguf: {is_loaded_gguf}")
+                            if is_loaded_gguf:
+                                logger.info("Skipping production pipeline - using loaded GGUF model directly")
+                            
+                            if is_flux_model and not is_loaded_gguf:
+                                # Use our new production FLUX pipeline only if we don't have a loaded GGUF
+                                logger.info("Using production FLUX pipeline for generation")
+                                
+                                # Create production pipeline if not exists
+                                if self.flux_pipeline is None:
+                                    logger.info("Creating production FLUX pipeline...")
+                                    # Determine variant from model name
+                                    if "q8" in image_model_name.lower():
+                                        variant = "gguf_q8"
+                                    elif "q6" in image_model_name.lower():
+                                        variant = "gguf_q6"
+                                    elif "q4" in image_model_name.lower():
+                                        variant = "gguf_q4"
+                                    else:
+                                        variant = "auto"
+                                    
+                                    self.flux_pipeline = create_production_pipeline(model_variant=variant)
+                                    logger.info(f"Production pipeline created with variant: {variant}")
+                                
+                                # Create generation request
+                                request = GenerationRequest(
                                     prompt=prompt,
                                     negative_prompt=negative_prompt,
                                     width=width,
                                     height=height,
-                                    num_inference_steps=steps,
-                                    guidance_scale=guidance_scale,
-                                    seed=seed
+                                    num_images=1,
+                                    seed=seed if seed != -1 else None,
+                                    style="photorealistic",  # Could be extracted from prompt
+                                    quality="high",
+                                    use_acceleration=True,
+                                    compile_model=False,  # Skip compilation for now
+                                    enhance_output=False,  # Skip enhancement for speed
+                                    model_variant=variant
                                 )
-                                # Check if it has images attribute or is direct image
-                                if hasattr(result, 'images'):
-                                    image = result.images[0]
+                                
+                                # Define a custom progress callback that works with the production pipeline
+                                def prod_progress_callback(current, total):
+                                    result_container["current_step"] = current
+                                    if progress:
+                                        progress_value = (current + 1) / total
+                                        progress(progress_value, f"Step {current + 1}/{total}")
+                                    
+                                    if self.stop_generation_flag:
+                                        result_container["stopped"] = True
+                                        raise StopIteration("Generation stopped by user")
+                                
+                                # Override the pipeline's internal progress callback
+                                # Note: This is a simplified approach - in production you'd integrate
+                                # the callback more deeply into the pipeline
+                                original_steps = steps
+                                
+                                # Generate with production pipeline
+                                gen_result = self.flux_pipeline.generate(request)
+                                
+                                if gen_result.success and gen_result.images:
+                                    image = gen_result.images[0]
+                                    logger.info(f"FLUX generation successful in {gen_result.timing.get('total', 0):.2f}s")
+                                    # Update progress to match expected steps
+                                    result_container["current_step"] = original_steps
                                 else:
-                                    image = result  # Direct image return
+                                    raise RuntimeError(f"FLUX generation failed: {gen_result.error}")
+                                    
                             elif is_flux_pipeline:
-                                # FluxPipeline doesn't accept callback_steps parameter
-                                logger.info("Using FluxPipeline-specific parameters (without callback_steps)")
-                                result = image_model(
-                                    prompt=prompt,
-                                    negative_prompt=negative_prompt,
-                                    width=width,
-                                    height=height,
-                                    num_inference_steps=steps,
-                                    guidance_scale=guidance_scale,
-                                    generator=generator,
-                                    callback_on_step_end=progress_callback
-                                )
-                                image = result.images[0]
+                                # FluxPipeline should never use generator to avoid device conflicts
+                                logger.info("Using FluxPipeline without generator")
+                                
+                                # Import memory manager for FLUX-specific optimizations
+                                from ..utils.memory_optimization import get_memory_manager
+                                memory_manager = get_memory_manager()
+                                
+                                # Pre-generation memory check
+                                memory_manager.aggressive_memory_clear()
+                                memory_manager.monitor_memory_usage("flux-pre-generation")
+                                
+                                # Check if image_model has device_map (components split across devices)
+                                if hasattr(image_model, 'hf_device_map') and image_model.hf_device_map:
+                                    logger.info(f"FLUX image_model has device_map: {image_model.hf_device_map}")
+                                    
+                                    # For device_map models, the VAE is on CPU while other components are on CUDA
+                                    # We need to temporarily move the VAE to CUDA for generation
+                                    moved_vae = False
+                                    try:
+                                        # Check if VAE is on CPU
+                                        if hasattr(image_model, 'vae'):
+                                            # Get the actual parameter device, not the module device
+                                            vae_device = next(image_model.vae.parameters()).device
+                                            logger.info(f"VAE is on device: {vae_device}")
+                                            if vae_device.type == 'cpu':
+                                                logger.info("Moving VAE from CPU to CUDA for generation")
+                                                image_model.vae = image_model.vae.to('cuda')
+                                                moved_vae = True
+                                        
+                                        # Try generation with detailed logging
+                                        logger.info(f"Starting FLUX generation with device_map")
+                                        logger.info(f"Prompt: {prompt[:50]}...")
+                                        logger.info(f"Steps: {steps}, Guidance: {guidance_scale}")
+                                        
+                                        result = image_model(
+                                            prompt=prompt,
+                                            negative_prompt=negative_prompt,
+                                            width=width,
+                                            height=height,
+                                            num_inference_steps=steps,
+                                            guidance_scale=guidance_scale,
+                                            callback_on_step_end=progress_callback
+                                        )
+                                        
+                                        logger.info("FLUX generation completed")
+                                        image = result.images[0]
+                                        
+                                    except Exception as e:
+                                        logger.error(f"FLUX generation failed: {e}")
+                                        error_msg = str(e)
+                                        logger.error(f"FULL FLUX ERROR: {error_msg}")
+                                        
+                                        # Check if it's a CUDA OOM error
+                                        if "CUDA out of memory" in error_msg:
+                                            memory_manager.monitor_memory_usage("flux-oom-error")
+                                            logger.error("CUDA OOM detected - attempting memory recovery")
+                                            memory_manager.aggressive_memory_clear()
+                                            
+                                            # Add helpful message
+                                            error_msg += "\n\nMemory optimization suggestions:\n"
+                                            error_msg += "- Try reducing image resolution\n"
+                                            error_msg += "- Use a smaller quantization (Q5, Q4)\n"
+                                            error_msg += "- Close other GPU applications\n"
+                                        
+                                        # No gradient fallback - re-raise the error
+                                        raise RuntimeError(f"FLUX generation failed: {error_msg}")
+                                    finally:
+                                        # Restore VAE to CPU if we moved it
+                                        if moved_vae and hasattr(image_model, 'vae'):
+                                            logger.info("Restoring VAE to CPU")
+                                            try:
+                                                image_model.vae = image_model.vae.to('cpu')
+                                            except Exception as e:
+                                                logger.warning(f"Could not restore VAE to CPU: {e}")
+                                else:
+                                    # Standard FLUX without device_map
+                                    result = image_model(
+                                        prompt=prompt,
+                                        negative_prompt=negative_prompt,
+                                        width=width,
+                                        height=height,
+                                        num_inference_steps=steps,
+                                        guidance_scale=guidance_scale,
+                                        callback_on_step_end=progress_callback
+                                    )
+                                    image = result.images[0]
                             else:
                                 # For other pipelines, check if they support callback_steps
-                                # GGUF models wrapped in StandaloneGGUFPipeline use FluxPipeline internally
+                                # GGUF image_models wrapped in StandaloneGGUFPipeline use FluxPipeline internally
                                 is_gguf_wrapped = hasattr(image_model, '_is_gguf_model') and image_model._is_gguf_model
                                 
                                 if is_gguf_wrapped:
                                     logger.info("Using GGUF pipeline parameters (no callback_steps)")
-                                    result = image_model(
-                                        prompt=prompt,
-                                        negative_prompt=negative_prompt,
-                                        width=width,
-                                        height=height,
-                                        num_inference_steps=steps,
-                                        guidance_scale=guidance_scale,
-                                        generator=generator,
-                                        seed=seed,  # Pass seed for StandaloneGGUFPipeline
-                                        callback_on_step_end=progress_callback
-                                    )
+                                    # Log detailed info about the GGUF model
+                                    logger.info(f"GGUF model info:")
+                                    logger.info(f"  - Has device_map: {getattr(image_model, '_has_device_map', False)}")
+                                    logger.info(f"  - Real pipeline: {hasattr(image_model, '_real_pipeline') and image_model._real_pipeline is not None}")
+                                    logger.info(f"  - Is placeholder: {getattr(image_model, '_is_placeholder', False)}")
+                                    
+                                    # Memory optimization for GGUF models
+                                    from ..utils.memory_optimization import get_memory_manager
+                                    memory_manager = get_memory_manager()
+                                    memory_manager.aggressive_memory_clear()
+                                    logger.info("Cleared memory for GGUF generation")
+                                    # GGUF models may use device_map internally
+                                    try:
+                                        logger.info("Calling GGUF model for generation...")
+                                        if use_generator and generator is not None:
+                                            result = image_model(
+                                                prompt=prompt,
+                                                negative_prompt=negative_prompt,
+                                                width=width,
+                                                height=height,
+                                                num_inference_steps=steps,
+                                                guidance_scale=guidance_scale,
+                                                generator=generator,
+                                                seed=seed,  # Pass seed for StandaloneGGUFPipeline
+                                                callback_on_step_end=progress_callback
+                                            )
+                                        else:
+                                            result = image_model(
+                                                prompt=prompt,
+                                                negative_prompt=negative_prompt,
+                                                width=width,
+                                                height=height,
+                                                num_inference_steps=steps,
+                                                guidance_scale=guidance_scale,
+                                                seed=seed,  # Pass seed for StandaloneGGUFPipeline
+                                                callback_on_step_end=progress_callback
+                                            )
+                                        logger.info("GGUF model call completed")
+                                    except Exception as gguf_error:
+                                        logger.error(f"GGUF model generation failed: {gguf_error}")
+                                        logger.error(f"GGUF error type: {type(gguf_error).__name__}")
+                                        raise
                                 else:
                                     logger.info("Using standard pipeline parameters (with callback_steps)")
-                                    result = image_model(
-                                        prompt=prompt,
-                                        negative_prompt=negative_prompt,
-                                        width=width,
-                                        height=height,
-                                        num_inference_steps=steps,
-                                        guidance_scale=guidance_scale,
-                                        generator=generator,
-                                        callback_on_step_end=progress_callback,
-                                        callback_steps=1  # Update on every step
-                                    )
+                                    if use_generator and generator is not None:
+                                        result = image_model(
+                                            prompt=prompt,
+                                            negative_prompt=negative_prompt,
+                                            width=width,
+                                            height=height,
+                                            num_inference_steps=steps,
+                                            guidance_scale=guidance_scale,
+                                            generator=generator,
+                                            callback_on_step_end=progress_callback,
+                                            callback_steps=1  # Update on every step
+                                        )
+                                    else:
+                                        # No generator, use global seed
+                                        if seed != -1:
+                                            torch.manual_seed(seed)
+                                            if torch.cuda.is_available():
+                                                torch.cuda.manual_seed_all(seed)
+                                        result = image_model(
+                                            prompt=prompt,
+                                            negative_prompt=negative_prompt,
+                                            width=width,
+                                            height=height,
+                                            num_inference_steps=steps,
+                                            guidance_scale=guidance_scale,
+                                            callback_on_step_end=progress_callback,
+                                            callback_steps=1  # Update on every step
+                                        )
                                 image = result.images[0]
                         except StopIteration as e:
                             # Handle user-initiated stop
@@ -229,142 +510,9 @@ class ImageGenerator:
 """
                             return
                         except RuntimeError as e:
-                            # Check if this is a device mismatch error
-                            if ("device" in str(e).lower() and "meta" in str(e).lower()) or "tensor on device meta is not on the expected device" in str(e).lower():
-                                logger.error(f"Device mismatch error: {str(e)}")
-                                # Try again without specifying a generator (let the model handle device internally)
-                                logger.info("Retrying without explicit generator device...")
-                                try:
-                                    # Check if the model is a FluxPipeline
-                                    model_type = type(image_model).__name__
-                                    is_flux_pipeline = "FluxPipeline" in model_type
-                                    logger.info(f"Retry - Model type: {model_type}, is FluxPipeline: {is_flux_pipeline}")
-
-                                    if is_flux_pipeline:
-                                        # FluxPipeline doesn't accept callback_steps parameter
-                                        logger.info("Retry - Using FluxPipeline-specific parameters (without callback_steps)")
-                                        # Create a CPU generator for FluxPipeline to avoid device mismatch
-                                        cpu_generator = torch.Generator("cpu").manual_seed(seed)
-                                        logger.info("Created CPU generator for FluxPipeline retry")
-                                        try:
-                                            image = image_model(
-                                                prompt=prompt,
-                                                negative_prompt=negative_prompt,
-                                                width=width,
-                                                height=height,
-                                                num_inference_steps=steps,
-                                                guidance_scale=guidance_scale,
-                                                generator=cpu_generator,
-                                                seed=seed,  # Pass seed for StandaloneGGUFPipeline
-                                                callback_on_step_end=progress_callback
-                                            ).images[0]
-                                        except RuntimeError as e2:
-                                            # If we still get a device mismatch error, try one final approach
-                                            if "tensor on device meta is not on the expected device" in str(e2).lower():
-                                                logger.error(f"Still getting device mismatch in retry: {str(e2)}")
-                                                logger.info("Final retry attempt - using CPU device for all operations")
-
-                                                # Keep model on GPU instead of moving to CPU
-                                                logger.warning("Device mismatch detected, but keeping model on GPU for performance")
-
-                                                # Final attempt without any generator
-                                                image = image_model(
-                                                    prompt=prompt,
-                                                    negative_prompt=negative_prompt,
-                                                    width=width,
-                                                    height=height,
-                                                    num_inference_steps=steps,
-                                                    guidance_scale=guidance_scale,
-                                                    seed=seed,  # Pass seed for StandaloneGGUFPipeline
-                                                    # No generator at all for final attempt
-                                                    callback_on_step_end=progress_callback
-                                                ).images[0]
-                                            else:
-                                                # Re-raise if it's not a device mismatch error
-                                                raise
-                                    else:
-                                        # For other pipelines, check if GGUF
-                                        is_gguf_wrapped = hasattr(image_model, '_is_gguf_model') and image_model._is_gguf_model
-                                        logger.info(f"Retry - Using {'GGUF' if is_gguf_wrapped else 'standard'} pipeline parameters")
-                                        try:
-                                            # Try with a CPU generator first
-                                            cpu_generator = torch.Generator("cpu").manual_seed(seed)
-                                            logger.info("Created CPU generator for pipeline retry")
-                                            
-                                            if is_gguf_wrapped:
-                                                image = image_model(
-                                                    prompt=prompt,
-                                                    negative_prompt=negative_prompt,
-                                                    width=width,
-                                                    height=height,
-                                                    num_inference_steps=steps,
-                                                    guidance_scale=guidance_scale,
-                                                    generator=cpu_generator,
-                                                    seed=seed,  # Pass seed for StandaloneGGUFPipeline
-                                                    callback_on_step_end=progress_callback
-                                                ).images[0]
-                                            else:
-                                                image = image_model(
-                                                    prompt=prompt,
-                                                    negative_prompt=negative_prompt,
-                                                    width=width,
-                                                    height=height,
-                                                    num_inference_steps=steps,
-                                                    guidance_scale=guidance_scale,
-                                                    generator=cpu_generator,
-                                                    callback_on_step_end=progress_callback,
-                                                    callback_steps=1  # Update on every step
-                                                ).images[0]
-                                        except RuntimeError as e2:
-                                            # If we still get a device mismatch error, try one final approach
-                                            if "tensor on device meta is not on the expected device" in str(e2).lower():
-                                                logger.error(f"Still getting device mismatch in retry: {str(e2)}")
-                                                logger.info("Final retry attempt - using CPU device for all operations")
-
-                                                # Keep model on GPU instead of moving to CPU
-                                                logger.warning("Device mismatch detected, but keeping model on GPU for performance")
-
-                                                # Final attempt without any generator
-                                                if is_gguf_wrapped:
-                                                    image = image_model(
-                                                        prompt=prompt,
-                                                        negative_prompt=negative_prompt,
-                                                        width=width,
-                                                        height=height,
-                                                        num_inference_steps=steps,
-                                                        guidance_scale=guidance_scale,
-                                                        seed=seed,  # Pass seed for StandaloneGGUFPipeline
-                                                        # No generator at all for final attempt
-                                                        callback_on_step_end=progress_callback
-                                                    ).images[0]
-                                                else:
-                                                    image = image_model(
-                                                        prompt=prompt,
-                                                        negative_prompt=negative_prompt,
-                                                        width=width,
-                                                        height=height,
-                                                        num_inference_steps=steps,
-                                                        guidance_scale=guidance_scale,
-                                                        # No generator at all for final attempt
-                                                        callback_on_step_end=progress_callback,
-                                                        callback_steps=1  # Update on every step
-                                                    ).images[0]
-                                            else:
-                                                # Re-raise if it's not a device mismatch error
-                                                raise
-                                except StopIteration as e:
-                                    # Handle user-initiated stop in the retry
-                                    logger.info(f"Generation stopped by user at step {result_container['current_step']}/{steps}")
-                                    result_container["info"] = f"""
-<div class="warning-box">
-    <h4>⚠️ Generation Stopped</h4>
-    <p>Image generation was stopped at step {result_container['current_step']}/{steps}.</p>
-</div>
-"""
-                                    return
-                            else:
-                                # Re-raise other runtime errors
-                                raise
+                            # Re-raise runtime errors - device mismatches should be fixed now
+                            logger.error(f"Runtime error during generation: {str(e)}")
+                            raise
 
                     # Clean up memory after generation
                     torch.cuda.empty_cache()
@@ -408,8 +556,12 @@ class ImageGenerator:
                     
                     result_container["info"] += "</div>"
             except Exception as e:
-                logger.error(f"Error generating image: {str(e)}")
-                result_container["error"] = str(e)
+                import traceback
+                error_msg = str(e) if str(e) else "Unknown error occurred"
+                logger.error(f"Error generating image: {error_msg}")
+                logger.error(f"Error type: {type(e).__name__}")
+                logger.error(f"Full traceback:\n{traceback.format_exc()}")
+                result_container["error"] = f"{type(e).__name__}: {error_msg}"
             finally:
                 # Mark as completed
                 result_container["completed"] = True
@@ -423,6 +575,7 @@ class ImageGenerator:
         try:
             # Add to queue and start thread
             generation_queue.put(1)
+            logger.info(f"Creating thread with image_model type: {type(image_model).__name__ if image_model else 'None'}")
             thread = threading.Thread(target=generate_in_background)
             thread.daemon = True  # Allow the thread to be terminated when the main program exits
             thread.start()
@@ -433,6 +586,8 @@ class ImageGenerator:
             # Wait for the thread to complete with detailed progress updates
             last_step = 0
             same_step_count = 0
+            # Check if this is a GGUF model for timeout adjustment
+            is_gguf_model = hasattr(image_model, '_is_gguf_model') and image_model._is_gguf_model
             while not result_container["completed"]:
                 # Check if user requested to stop generation
                 if self.stop_generation_flag and not result_container["stopped"]:
@@ -481,9 +636,11 @@ class ImageGenerator:
                 # Small sleep to prevent UI freezing
                 time.sleep(0.1)
 
-                # Timeout after 30 seconds of no progress (300 iterations at 0.1s each)
-                if last_step > 0 and same_step_count > 300:
-                    raise TimeoutError("Image generation appears to be stuck")
+                # Timeout after 5 minutes of no progress for GGUF models (they're slow!)
+                # GGUF Q8 models can take 3-4 minutes per step on consumer GPUs
+                timeout_iterations = 3000 if is_gguf_model else 300  # 5 min vs 30 sec
+                if last_step > 0 and same_step_count > timeout_iterations:
+                    raise TimeoutError(f"Image generation appears to be stuck (no progress for {same_step_count * 0.1:.0f} seconds)")
 
             # Update progress based on completion status
             if result_container["stopped"]:
@@ -493,6 +650,15 @@ class ImageGenerator:
 
             # Check for errors
             if result_container["error"]:
+                # Add memory info to error messages
+                if "CUDA out of memory" in str(result_container["error"]):
+                    from ..utils.memory_optimization import get_memory_manager
+                    memory_manager = get_memory_manager()
+                    memory_info = f"\n\nMemory Status:\n"
+                    memory_info += f"- Free VRAM: {memory_manager.get_available_memory():.1f} GB\n"
+                    memory_info += f"- Total VRAM: {memory_manager.vram_gb:.1f} GB\n"
+                    memory_info += "\nTry using a smaller model or reducing resolution."
+                    result_container["error"] = str(result_container["error"]) + memory_info
                 raise Exception(result_container["error"])
 
             # Return the results - if stopped and no image was generated, return a message
@@ -509,4 +675,6 @@ class ImageGenerator:
 
         except Exception as e:
             logger.error(f"Error in image generation process: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return None, f"❌ Error: {str(e)}"

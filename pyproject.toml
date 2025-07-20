@@ -5,9 +5,10 @@ requires-python = ">=3.10,<3.12"
 dependencies = [
     # Core - More flexible compatible versions  
     "gradio>=5.0.0",  # Use newer version to avoid urllib3 conflicts
-    "torch>=2.4.0,<2.5.0",  # Pin torch version for faster install
-    "torchvision>=0.19.0,<0.20.0", 
-    "torchaudio>=2.4.0,<2.5.0",
+    # PyTorch - Comment out and install manually with correct CUDA version
+    # "torch>=2.4.0,<2.5.0",  # Pin torch version for faster install
+    # "torchvision>=0.19.0,<0.20.0", 
+    # "torchaudio>=2.4.0,<2.5.0",
 
     # ML/AI - Compatible versions
     "transformers>=4.46.1",  # Fixed version for Python 3.8+ compatibility
@@ -48,6 +49,8 @@ dependencies = [
     "psutil>=5.9.0",  # Added for system monitoring
     "pywin32>=228; platform_system == 'Windows'",  # For Windows-specific functionality
     "pynvml>=11.5.0",  # For NVIDIA GPU detection
+    "gputil>=1.4.0",  # For GPU monitoring
+    "controlnet-aux>=0.0.7",  # For ControlNet preprocessing (depth, canny, pose, etc.)
 
     # Security & API
     "keyring>=24.0.0",  # Secure credential storage

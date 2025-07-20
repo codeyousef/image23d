@@ -138,6 +138,14 @@ def create_generate_3d_subtab(app: Any) -> None:
         with gr.Accordion("Image Generation Settings", open=False):
             seed, steps, cfg, width, height = create_generation_settings()
         
+        # Model status indicator
+        with gr.Row():
+            model_status = gr.HTML(value="""
+            <div style='padding: 10px; background: #e3f2fd; border-radius: 5px; margin-bottom: 10px;'>
+                <strong>ℹ️ Model Status:</strong> Select a 3D model to see its status
+            </div>
+            """)
+        
         # Generate button
         generate_btn = create_action_button("🎲 Generate 3D Model", variant="primary")
         
@@ -148,6 +156,61 @@ def create_generate_3d_subtab(app: Any) -> None:
                 output_3d = gr.Model3D(label="3D Model")
             
             generation_info = gr.HTML()
+        
+        # Model status check function
+        def check_model_status(model_name):
+            """Check and display the status of the selected 3D model"""
+            if not model_name or "(not downloaded)" in model_name:
+                return """
+                <div style='padding: 10px; background: #ffebee; border-radius: 5px;'>
+                    <strong>❌ Model Not Available:</strong> Please download the model first
+                </div>
+                """
+            
+            # Try to check if model can load properly
+            try:
+                # This is a simplified check - in reality we'd check if the model loads
+                hunyuan3d_path = Path("Hunyuan3D")
+                if not hunyuan3d_path.exists():
+                    return """
+                    <div style='padding: 10px; background: #fff3e0; border-radius: 5px;'>
+                        <strong>⚠️ Warning:</strong> Hunyuan3D directory not found. The model may fall back to demo mode.
+                        <br>Install with: <code>pip install -e ./Hunyuan3D</code>
+                    </div>
+                    """
+                
+                # Check if hy3dshape can be imported
+                try:
+                    import sys
+                    hy3dshape_path = hunyuan3d_path / "hy3dshape"
+                    if str(hy3dshape_path) not in sys.path:
+                        sys.path.insert(0, str(hy3dshape_path))
+                    from hy3dshape.pipelines import Hunyuan3DDiTFlowMatchingPipeline
+                    return f"""
+                    <div style='padding: 10px; background: #e8f5e9; border-radius: 5px;'>
+                        <strong>✅ Model Ready:</strong> {model_name} is available and should work properly
+                    </div>
+                    """
+                except ImportError:
+                    return f"""
+                    <div style='padding: 10px; background: #fff3e0; border-radius: 5px;'>
+                        <strong>⚠️ Demo Mode:</strong> {model_name} will use simplified demo generation
+                        <br><small>Hunyuan3D modules not installed. Run: <code>python install_hunyuan3d.py</code></small>
+                    </div>
+                    """
+            except Exception as e:
+                return f"""
+                <div style='padding: 10px; background: #ffebee; border-radius: 5px;'>
+                    <strong>❌ Error:</strong> {str(e)}
+                </div>
+                """
+        
+        # Wire up model selection to status check
+        hunyuan_model.change(
+            fn=check_model_status,
+            inputs=[hunyuan_model],
+            outputs=[model_status]
+        )
         
         # Wire up generation
         def generate_3d_object(prompt, negative_prompt, img_model, model_3d,
@@ -160,59 +223,26 @@ def create_generate_3d_subtab(app: Any) -> None:
                 return None, None, "❌ Please select both image and 3D models"
             
             try:
-                progress(0.05, "Submitting generation job...")
-                
-                # Submit full pipeline job
-                job_id = app.submit_generation_job(
-                    job_type="full_pipeline",
-                    params={
-                        "prompt": prompt,
-                        "negative_prompt": negative_prompt,
-                        "model_name": img_model,
-                        "hunyuan3d_model_name": model_3d,
-                        "width": width,
-                        "height": height,
-                        "steps": steps,
-                        "guidance_scale": cfg,
-                        "seed": seed,
-                        "num_views": num_views,
-                        "mesh_resolution": mesh_res,
-                        "texture_resolution": tex_res,
-                        "output_format": format
-                    }
+                # Use direct generation for real-time progress updates
+                result = app.generate_3d_direct(
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    image_model_name=img_model,
+                    hunyuan3d_model_name=model_3d,
+                    width=width,
+                    height=height,
+                    steps=steps,
+                    guidance_scale=cfg,
+                    seed=seed,
+                    num_views=num_views,
+                    mesh_resolution=mesh_res,
+                    texture_resolution=tex_res,
+                    output_format=format,
+                    progress_callback=progress
                 )
                 
-                progress(0.1, f"Job {job_id[:8]} submitted...")
-                
-                # Poll for completion
-                import time
-                job = app.queue_manager.get_job(job_id)
-                
-                while job and job.status.value in ["pending", "running"]:
-                    time.sleep(0.5)
-                    job = app.queue_manager.get_job(job_id)
-                    
-                    if job:
-                        current_progress = 0.1 + job.progress * 0.85
-                        msg = job.progress_message or f"Processing... ({current_progress*100:.0f}%)"
-                        progress(current_progress, msg)
-                
-                if job and job.status.value == "completed" and job.result:
-                    result = job.result
-                    
-                    # Get image
-                    image = result.get("image")
-                    image_path = result.get("image_path")
-                    if not image and image_path and Path(image_path).exists():
-                        from PIL import Image
-                        image = Image.open(image_path)
-                    
-                    # Get mesh path
-                    mesh_path = result.get("mesh_path")
-                    
-                    progress(1.0, "3D generation complete!")
-                    
-                    return image, mesh_path, f"""
+                if result["success"]:
+                    return result["image"], result["mesh_path"], f"""
                     <div class="success-box">
                         <h4>✅ 3D Model Generated!</h4>
                         <ul>
@@ -224,8 +254,7 @@ def create_generate_3d_subtab(app: Any) -> None:
                     </div>
                     """
                 else:
-                    error = job.error if job else "Job not found"
-                    return None, None, f"❌ Generation failed: {error}"
+                    return None, None, f"❌ Generation failed: {result['error']}"
                     
             except Exception as e:
                 logger.error(f"3D generation error: {e}")
@@ -358,15 +387,23 @@ def create_image_to_3d_subtab(app: Any) -> None:
                 # Poll for completion
                 import time
                 job = app.queue_manager.get_job(job_id)
+                last_progress = -1  # Track last progress to avoid duplicate logs
                 
                 while job and job.status.value in ["pending", "running"]:
                     time.sleep(0.5)
                     job = app.queue_manager.get_job(job_id)
                     
                     if job:
-                        current_progress = 0.3 + job.progress * 0.65
+                        # Ensure job.progress is a valid number
+                        job_progress = job.progress if job.progress is not None else 0.0
+                        current_progress = 0.3 + job_progress * 0.65
                         msg = job.progress_message or f"Converting... ({current_progress*100:.0f}%)"
                         progress(current_progress, msg)
+                        
+                        # Log progress for debugging only when it changes
+                        if job_progress != last_progress:
+                            logger.info(f"UI Poll (Image2D) - Job {job_id}: status={job.status.value}, progress={job_progress:.3f}, message={msg}")
+                            last_progress = job_progress
                 
                 if job and job.status.value == "completed" and job.result:
                     mesh_path = job.result.get("mesh_path")

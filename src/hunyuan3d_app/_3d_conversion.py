@@ -4,6 +4,7 @@ import logging
 import os
 import tempfile
 import time
+import traceback
 from pathlib import Path
 from typing import Tuple, Optional, Any, Dict, List
 
@@ -47,7 +48,13 @@ class ThreeDConverter:
             input_path = self.cache_dir / f"input_{timestamp}.png"
             image.save(input_path)
 
-            logger.info(f"Starting 3D conversion with {hunyuan3d_model_name}")
+            logger.info(f"\n{'='*80}")
+            logger.info(f"[3D_CONVERSION] Starting 3D conversion")
+            logger.info(f"[3D_CONVERSION] Model name: {hunyuan3d_model_name}")
+            logger.info(f"[3D_CONVERSION] Model type: {type(hunyuan3d_model)}")
+            logger.info(f"[3D_CONVERSION] Image type: {type(image)}")
+            logger.info(f"[3D_CONVERSION] Image size: {image.size if hasattr(image, 'size') else 'N/A'}")
+            logger.info(f"[3D_CONVERSION] Image mode: {image.mode if hasattr(image, 'mode') else 'N/A'}")
             progress(0.1, "Preparing for 3D conversion...")
 
             # Try to use real Hunyuan3D model
@@ -84,11 +91,28 @@ class ThreeDConverter:
                 return str(mesh_path), preview, info
                 
             except Exception as e:
-                logger.warning(f"Hunyuan3D conversion failed, falling back to enhanced dummy: {e}")
-                return self._create_enhanced_dummy_model(
-                    image, hunyuan3d_model_name, num_views, 
-                    mesh_resolution, texture_resolution, timestamp, progress
-                )
+                logger.error(f"Hunyuan3D conversion failed: {e}")
+                logger.error(f"Error type: {type(e).__name__}")
+                logger.error(f"Full traceback: {traceback.format_exc()}")
+                logger.warning("Falling back to demonstration model - this is NOT using the actual Hunyuan3D model!")
+                
+                # Create a warning message for the user
+                demo_info = f"""
+<div class="warning-box" style="padding: 15px; background: #fff3e0; border-radius: 8px; border-left: 4px solid #ff9800;">
+    <h4>⚠️ Using Demonstration Model</h4>
+    <p><strong>Important:</strong> The actual Hunyuan3D model failed to load, so a simplified demonstration model is being used instead.</p>
+    <p><strong>Error:</strong> {str(e)}</p>
+    <p>This demo model does NOT use your text prompt for 3D generation - it only analyzes the generated image.</p>
+    <p><strong>To fix this:</strong></p>
+    <ul>
+        <li>Check the console logs for detailed error messages</li>
+        <li>Ensure Hunyuan3D dependencies are installed</li>
+        <li>Verify the model files are complete</li>
+    </ul>
+</div>
+"""
+                # No dummy model - fail properly
+                raise RuntimeError(f"3D conversion failed: {str(e)}")
 
         except Exception as e:
             logger.error(f"3D conversion failed: {e}")
@@ -120,20 +144,26 @@ class ThreeDConverter:
                 raise NotImplementedError("No Hunyuan3D model loaded")
             
             # Check if it's a placeholder or real model
-            if isinstance(hunyuan3d_model, dict) and hunyuan3d_model.get("status") == "placeholder":
+            if isinstance(hunyuan3d_model, dict) and hunyuan3d_model.get("type") == "placeholder":
                 logger.info("Using Hunyuan3D placeholder model - will create enhanced demo")
-                raise NotImplementedError("Hunyuan3D inference not yet integrated")
+                logger.info(f"Placeholder error: {hunyuan3d_model.get('error', 'Unknown error')}")
+                raise NotImplementedError(f"Hunyuan3D is a placeholder - actual model not loaded: {hunyuan3d_model.get('error', 'Unknown error')}")
             
             # Log what type of model we have
             logger.info(f"Hunyuan3D model type: {type(hunyuan3d_model)}")
+            logger.info(f"Model attributes: {dir(hunyuan3d_model) if hunyuan3d_model else 'None'}")
             
             # Check if it's our wrapper
             if hasattr(hunyuan3d_model, 'has_shape_pipeline'):
+                logger.info("Found Hunyuan3D wrapper object")
                 if not hunyuan3d_model.has_shape_pipeline():
                     logger.error("Hunyuan3D wrapper exists but shape pipeline not loaded")
-                    raise RuntimeError("Shape pipeline not loaded")
+                    logger.error("This usually means the hy3dshape module could not be imported")
+                    raise RuntimeError("Shape pipeline not loaded - hy3dshape module may be missing")
                 else:
                     logger.info("Shape pipeline is loaded and ready")
+            else:
+                logger.error(f"Model does not have has_shape_pipeline method. Type: {type(hunyuan3d_model)}")
             
             if not hasattr(hunyuan3d_model, 'generate_mesh'):
                 raise NotImplementedError("Hunyuan3D model does not have generate_mesh method")
@@ -226,7 +256,8 @@ class ThreeDConverter:
         
         return mesh
 
-    def _create_enhanced_dummy_model(
+    # REMOVED: No dummy models allowed
+    '''def _create_enhanced_dummy_model(
         self,
         image: Image.Image,
         model_name: str,
@@ -238,6 +269,8 @@ class ThreeDConverter:
     ) -> Tuple[str, Image.Image, str]:
         """Create an enhanced dummy 3D model when real conversion fails"""
         
+        logger.info(f"[CREATE_ENHANCED_DUMMY_MODEL] Creating demo model because Hunyuan3D failed")
+        logger.info(f"[CREATE_ENHANCED_DUMMY_MODEL] Input image - size: {image.size}, mode: {image.mode}")
         progress(0.4, "Creating enhanced demo model...")
         
         # Analyze input image to create a more relevant shape
@@ -294,6 +327,8 @@ class ThreeDConverter:
             # Simple analysis: check image dimensions and content
             height, width = img_array.shape[:2]
             aspect_ratio = width / height
+            logger.info(f"[CREATE_ENHANCED_DUMMY_MODEL] Image array shape: {img_array.shape}")
+            logger.info(f"[CREATE_ENHANCED_DUMMY_MODEL] Image mean RGB: {img_array.mean(axis=(0,1)).astype(int).tolist()}")
             
             # Analyze color distribution and edges
             gray = np.mean(img_array, axis=2)
@@ -336,7 +371,7 @@ class ThreeDConverter:
             return mesh
             
         except Exception as e:
-            logger.warning(f"Image analysis failed, using default shape: {e}")
+            logger.warning(f"[CREATE_ENHANCED_DUMMY_MODEL] Image analysis failed, using default shape: {e}")
             return trimesh.creation.box(extents=[1, 1, 1])
 
     def _apply_image_texture(self, mesh: trimesh.Trimesh, image: Image.Image, resolution: int) -> trimesh.Trimesh:
@@ -486,6 +521,7 @@ class ThreeDConverter:
             # Ultimate fallback
             img = Image.new('RGB', (512, 512), color='lightgray')
             return img
+    '''
 
     def get_supported_formats(self) -> List[str]:
         """Get list of supported export formats"""

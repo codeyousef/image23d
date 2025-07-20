@@ -1,5 +1,16 @@
 import os
 
+# Apply torchvision compatibility patch first
+try:
+    from .torchvision_patch import patch_torchvision
+    patch_torchvision()
+except Exception:
+    pass
+
+# Setup Hunyuan3D paths before any other imports
+from .setup_paths import setup_hunyuan3d_paths
+setup_hunyuan3d_paths()
+
 # Configure tqdm to update more frequently
 os.environ["TQDM_MININTERVAL"] = "0.01"  # Update every 0.01 seconds (default is 0.1)
 os.environ["TQDM_MINITERS"] = "1"       # Update after each iteration (default is 1)

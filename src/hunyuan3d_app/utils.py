@@ -1,39 +1,13 @@
-import base64
 import logging
-import os
-from pathlib import Path
-from typing import Optional, Any
 import json
 import torch
 
 logger = logging.getLogger(__name__)
 
-# --- App Configuration ---
-SECRETS_DIR = Path.cwd() / ".secrets"
-HF_TOKEN_FILE = SECRETS_DIR / "hf_token.txt"
-
+# Import auth functions from utils package for backward compatibility
+from .utils.auth import save_hf_token, load_hf_token
 
 # --- Helper Functions ---
-
-def save_hf_token(token: str):
-    """Base64 encode and save the Hugging Face token."""
-    if not token:
-        return
-    SECRETS_DIR.mkdir(exist_ok=True)
-    encoded_token = base64.b64encode(token.encode('utf-8'))
-    HF_TOKEN_FILE.write_bytes(encoded_token)
-
-
-def load_hf_token():
-    """Load and decode the Hugging Face token."""
-    if not HF_TOKEN_FILE.exists():
-        return None
-    try:
-        encoded_token = HF_TOKEN_FILE.read_bytes()
-        return base64.b64decode(encoded_token).decode('utf-8')
-    except Exception as e:
-        logger.error(f"Could not load HF token: {e}")
-        return None
 
 
 class TensorEncoder(json.JSONEncoder):

@@ -1,6 +1,7 @@
 """Enhanced Hunyuan3D Studio with all new features integrated"""
 
 import logging
+import time
 from pathlib import Path
 from typing import Tuple, Dict, Any, Optional, List
 
@@ -33,8 +34,21 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
     """Enhanced version with all new features integrated"""
     
     def __init__(self):
+        # Get progress manager first (before base class init)
+        from ..services.websocket import get_progress_manager
+        self.progress_manager = get_progress_manager()
+        
         # Initialize base class
         super().__init__()
+        
+        # Re-create ModelManager with WebSocket server
+        from ..models.manager import ModelManager
+        from pathlib import Path
+        self.model_manager = ModelManager(
+            MODELS_DIR, 
+            Path(__file__).parent.parent / "models",
+            websocket_server=self.progress_manager
+        )
         
         # Initialize new managers
         self.credential_manager = CredentialManager()
@@ -80,9 +94,6 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
             model_dir=MODELS_DIR / "insightface",
             cache_dir=CACHE_DIR / "faceswap"
         )
-        
-        # Progress streaming
-        self.progress_manager = get_progress_manager()
         
         # Additional setup
         self.output_dir = OUTPUT_DIR
@@ -152,6 +163,8 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
         
         # Enhanced progress callback that also sends to WebSocket
         def enhanced_progress(progress_value, message):
+            logger.info(f"Enhanced progress called: {progress_value:.2f} - {message}")
+            # Call the queue progress callback with the raw progress value
             progress_callback(progress_value, message)
             # Send to WebSocket progress manager
             try:
@@ -165,15 +178,23 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
                 logger.warning(f"Failed to send WebSocket progress: {e}")
         
         # Load model if needed
-        if self.image_model_name != model_name:
-            enhanced_progress(0.1, f"Loading model {model_name}...")
-            status, model, model_name_loaded = self.model_manager.load_image_model(
-                model_name, self.image_model, self.image_model_name, "cuda", progress=enhanced_progress
-            )
-            if "❌" in status:
-                raise Exception(f"Failed to load model: {status}")
-            self.image_model = model
-            self.image_model_name = model_name_loaded
+        try:
+            if self.image_model_name != model_name:
+                enhanced_progress(0.1, f"Loading model {model_name}...")
+                status, model, model_name_loaded = self.model_manager.load_image_model(
+                    model_name, self.image_model, self.image_model_name, "cuda", progress=enhanced_progress
+                )
+                if "❌" in status:
+                    raise Exception(f"Failed to load model: {status}")
+                self.image_model = model
+                self.image_model_name = model_name_loaded
+                enhanced_progress(0.3, "Model loaded successfully")
+            else:
+                enhanced_progress(0.3, "Using cached model")
+        except Exception as e:
+            logger.error(f"Model loading failed: {e}")
+            enhanced_progress(1.0, f"Error: {str(e)}")
+            return {"image": None, "info": f"❌ Model loading failed: {str(e)}", "path": None, "image_path": None, "error": str(e)}
                 
         # Apply LoRAs if specified
         if lora_configs and self.image_model:
@@ -182,18 +203,23 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
             
         # Generate image
         enhanced_progress(0.3, "Generating image...")
-        image, info = self.image_generator.generate_image(
-            self.image_model,
-            self.image_model_name,
-            prompt,
-            negative_prompt,
-            width,
-            height,
-            steps,
-            guidance_scale,
-            seed,
-            progress=lambda p, msg: enhanced_progress(0.3 + p * 0.6, msg)
-        )
+        try:
+            image, info = self.image_generator.generate_image(
+                self.image_model,
+                self.image_model_name,
+                prompt,
+                negative_prompt,
+                width,
+                height,
+                steps,
+                guidance_scale,
+                seed,
+                progress=lambda p, msg: enhanced_progress(0.3 + p * 0.6, msg)
+            )
+        except Exception as e:
+            logger.error(f"Image generation failed: {e}")
+            enhanced_progress(1.0, f"Error: {str(e)}")
+            return {"image": None, "info": f"❌ Image generation failed: {str(e)}", "path": None, "image_path": None, "error": str(e)}
         
         if image:
             # Save to history
@@ -223,12 +249,19 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
                 output_paths=[str(image_path)],
                 metadata={"info": info}
             )
-            
+        else:
+            # No image generated
+            logger.warning("No image was generated")
+            return {"image": None, "info": info or "❌ No image generated", "path": None, "image_path": None}
+        
         progress_callback(1.0, "Complete!")
-        return {"image": image, "info": info, "path": str(image_path) if image else None}
+        return {"image": image, "info": info, "path": str(image_path) if image else None, "image_path": str(image_path) if image else None}
         
     def _process_3d_job(self, params: Dict[str, Any], progress_callback):
         """Process a 3D conversion job"""
+        logger.info(f"[STUDIO_ENHANCED._process_3d_job] Starting 3D job processing")
+        logger.info(f"[STUDIO_ENHANCED._process_3d_job] Params keys: {list(params.keys())}")
+        
         try:
             from .._3d_conversion import ThreeDConverter
             
@@ -239,6 +272,10 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
             mesh_resolution = params.get("mesh_resolution", 512)
             texture_resolution = params.get("texture_resolution", 1024)
             
+            logger.info(f"[STUDIO_ENHANCED._process_3d_job] Image type: {type(image)}")
+            logger.info(f"[STUDIO_ENHANCED._process_3d_job] Image size: {image.size if hasattr(image, 'size') else 'N/A'}")
+            logger.info(f"[STUDIO_ENHANCED._process_3d_job] Model name: {model_name}")
+            
             if not image:
                 raise ValueError("No input image provided")
             
@@ -247,19 +284,34 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
             # Load 3D model if needed
             if self.hunyuan3d_model_name != model_name:
                 progress_callback(0.05, f"Loading Hunyuan3D model {model_name}...")
+                logger.info(f"[STUDIO_ENHANCED._process_3d_job] Current model: {self.hunyuan3d_model_name}, requested: {model_name}")
                 
                 # Use model manager to load the 3D model
                 success, message = self.model_manager.load_model(model_name, model_type="3d")
+                logger.info(f"[STUDIO_ENHANCED._process_3d_job] Model load result: success={success}, message={message}")
                 
                 if success:
                     self.hunyuan3d_model = self.model_manager.hunyuan3d_model
                     self.hunyuan3d_model_name = model_name
-                    logger.info(f"Loaded Hunyuan3D model: {message}")
+                    logger.info(f"[STUDIO_ENHANCED._process_3d_job] Loaded Hunyuan3D model: {message}")
+                    logger.info(f"[STUDIO_ENHANCED._process_3d_job] Model type: {type(self.hunyuan3d_model)}")
+                    logger.info(f"[STUDIO_ENHANCED._process_3d_job] Model has generate_mesh: {hasattr(self.hunyuan3d_model, 'generate_mesh')}")
                 else:
-                    logger.warning(f"Failed to load Hunyuan3D model, using placeholder: {message}")
+                    logger.warning(f"[STUDIO_ENHANCED._process_3d_job] Failed to load Hunyuan3D model, using placeholder: {message}")
                     # Use a placeholder model as fallback
                     self.hunyuan3d_model = {"type": "placeholder", "name": model_name, "error": message}
                     self.hunyuan3d_model_name = model_name
+            else:
+                logger.info(f"[STUDIO_ENHANCED._process_3d_job] Using already loaded model: {model_name}")
+                logger.info(f"[STUDIO_ENHANCED._process_3d_job] Model type: {type(self.hunyuan3d_model)}")
+                # Check if it's a real model or placeholder
+                if isinstance(self.hunyuan3d_model, dict) and self.hunyuan3d_model.get("type") == "placeholder":
+                    logger.warning("[STUDIO_ENHANCED._process_3d_job] Currently loaded model is a placeholder, attempting to reload...")
+                    # Try to reload the model
+                    success, message = self.model_manager.load_model(model_name, model_type="3d")
+                    if success:
+                        self.hunyuan3d_model = self.model_manager.hunyuan3d_model
+                        logger.info("[STUDIO_ENHANCED._process_3d_job] Successfully reloaded real Hunyuan3D model")
             
             progress_callback(0.2, "Loading 3D converter...")
             
@@ -272,6 +324,10 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
             # Convert to 3D
             progress_callback(0.3, "Converting image to 3D...")
             
+            logger.info(f"[STUDIO_ENHANCED._process_3d_job] Calling converter.convert_to_3d")
+            logger.info(f"[STUDIO_ENHANCED._process_3d_job] hunyuan3d_model type: {type(self.hunyuan3d_model)}")
+            logger.info(f"[STUDIO_ENHANCED._process_3d_job] Is placeholder: {isinstance(self.hunyuan3d_model, dict) and self.hunyuan3d_model.get('type') == 'placeholder'}")
+            
             mesh_path, preview, info = converter.convert_to_3d(
                 self.hunyuan3d_model,
                 model_name,
@@ -281,6 +337,8 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
                 texture_resolution,
                 progress=lambda p, msg: progress_callback(0.3 + p * 0.6, msg)
             )
+            
+            logger.info(f"[STUDIO_ENHANCED._process_3d_job] Conversion complete. Mesh path: {mesh_path}")
             
             progress_callback(1.0, "3D conversion complete!")
             
@@ -317,6 +375,9 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
         
     def _process_full_pipeline_job(self, params: Dict[str, Any], progress_callback):
         """Process a full text-to-3D pipeline job"""
+        logger.info(f"[STUDIO_ENHANCED._process_full_pipeline_job] Starting full pipeline")
+        logger.info(f"[STUDIO_ENHANCED._process_full_pipeline_job] Params: prompt='{params.get('prompt')}', model={params.get('model_name')}")
+        
         try:
             # First generate image
             progress_callback(0.0, "Starting full pipeline...")
@@ -324,13 +385,26 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
                 lambda p, d: progress_callback(p * 0.4, f"Image: {d}")
             )
             
+            logger.info(f"[STUDIO_ENHANCED._process_full_pipeline_job] Image generation result: {list(image_result.keys())}")
+            logger.info(f"[STUDIO_ENHANCED._process_full_pipeline_job] Has image: {'image' in image_result}")
+            
             if image_result.get("image"):
                 # Then convert to 3D
                 progress_callback(0.4, "Starting 3D conversion...")
                 
+                generated_image = image_result["image"]
+                logger.info(f"[STUDIO_ENHANCED._process_full_pipeline_job] Generated image type: {type(generated_image)}")
+                logger.info(f"[STUDIO_ENHANCED._process_full_pipeline_job] Generated image size: {generated_image.size if hasattr(generated_image, 'size') else 'N/A'}")
+                
+                # Save debug image
+                if hasattr(generated_image, 'save'):
+                    debug_path = Path("outputs") / f"debug_generated_{int(time.time())}.png"
+                    generated_image.save(debug_path)
+                    logger.info(f"[STUDIO_ENHANCED._process_full_pipeline_job] Saved debug image to: {debug_path}")
+                
                 # Prepare 3D conversion parameters
                 three_d_params = {
-                    "image": image_result["image"],
+                    "image": generated_image,
                     "model_name": params.get("hunyuan3d_model_name", "hunyuan3d-21"),
                     "num_views": 8,
                     "mesh_resolution": 512,
@@ -834,3 +908,182 @@ class Hunyuan3DStudioEnhanced(Hunyuan3DStudio):
         except Exception as e:
             logger.error(f"Face swap failed: {e}")
             raise
+            
+    def generate_3d_direct(
+        self,
+        prompt: str,
+        negative_prompt: str,
+        image_model_name: str,
+        hunyuan3d_model_name: str,
+        width: int,
+        height: int,
+        steps: int,
+        guidance_scale: float,
+        seed: int,
+        num_views: int,
+        mesh_resolution: int,
+        texture_resolution: int,
+        output_format: str,
+        progress_callback: Optional[Any] = None
+    ) -> Dict[str, Any]:
+        """Direct 3D generation that works with Gradio Progress
+        
+        This bypasses the job queue to allow real-time progress updates in the UI.
+        """
+        try:
+            # Phase 1: Generate Image
+            if progress_callback:
+                progress_callback(0.0, "Starting image generation...")
+            
+            # Load image model if needed
+            if self.image_model_name != image_model_name:
+                if progress_callback:
+                    progress_callback(0.05, f"Loading {image_model_name}...")
+                    
+                status, model, model_name_loaded = self.model_manager.load_image_model(
+                    image_model_name, 
+                    self.image_model, 
+                    self.image_model_name, 
+                    "cuda",
+                    progress=lambda p, msg: progress_callback(0.05 + p * 0.1, msg) if progress_callback else None
+                )
+                
+                if "❌" in status:
+                    return {
+                        "success": False,
+                        "error": f"Failed to load model: {status}",
+                        "image": None,
+                        "mesh_path": None
+                    }
+                    
+                self.image_model = model
+                self.image_model_name = model_name_loaded
+            
+            # Generate image
+            if progress_callback:
+                progress_callback(0.15, "Generating image...")
+                
+            try:
+                image, info = self.image_generator.generate_image(
+                    self.image_model,
+                    self.image_model_name,
+                    prompt,
+                    negative_prompt,
+                    width,
+                    height,
+                    steps,
+                    guidance_scale,
+                    seed,
+                    progress=lambda p, msg: progress_callback(0.15 + p * 0.35, msg) if progress_callback else None
+                )
+            except Exception as e:
+                logger.error(f"Image generation failed: {e}")
+                return {
+                    "success": False,
+                    "error": f"Image generation failed: {str(e)}",
+                    "image": None,
+                    "mesh_path": None
+                }
+            
+            if not image:
+                return {
+                    "success": False,
+                    "error": "No image was generated",
+                    "image": None,
+                    "mesh_path": None
+                }
+            
+            # Save image
+            import uuid
+            generation_id = str(uuid.uuid4())
+            image_path = OUTPUT_DIR / f"image_{generation_id}.png"
+            image.save(image_path)
+            
+            # Phase 2: Convert to 3D
+            if progress_callback:
+                progress_callback(0.5, "Starting 3D conversion...")
+            
+            # Load 3D model if needed
+            if self.hunyuan3d_model_name != hunyuan3d_model_name:
+                if progress_callback:
+                    progress_callback(0.55, f"Loading {hunyuan3d_model_name}...")
+                    
+                success, message = self.model_manager.load_model(hunyuan3d_model_name, model_type="3d")
+                
+                if success:
+                    self.hunyuan3d_model = self.model_manager.hunyuan3d_model
+                    self.hunyuan3d_model_name = hunyuan3d_model_name
+                    logger.info(f"Loaded Hunyuan3D model: {message}")
+                else:
+                    logger.warning(f"Failed to load Hunyuan3D model, using placeholder: {message}")
+                    self.hunyuan3d_model = {"type": "placeholder", "name": hunyuan3d_model_name, "error": message}
+                    self.hunyuan3d_model_name = hunyuan3d_model_name
+            
+            # Convert to 3D
+            if progress_callback:
+                progress_callback(0.6, "Converting image to 3D...")
+                
+            from .._3d_conversion import ThreeDConverter
+            converter = ThreeDConverter(
+                cache_dir=self.output_dir / "cache",
+                output_dir=self.output_dir
+            )
+            
+            mesh_path, preview_path, mesh_info = converter.convert_to_3d(
+                self.hunyuan3d_model,
+                hunyuan3d_model_name,
+                image,
+                num_views,
+                mesh_resolution,
+                texture_resolution,
+                progress=lambda p, msg: progress_callback(0.6 + p * 0.35, msg) if progress_callback else None
+            )
+            
+            if progress_callback:
+                progress_callback(0.95, "Saving to history...")
+            
+            # Save to history
+            self.history_manager.add_generation(
+                generation_id=generation_id,
+                generation_type="3d_full",
+                model_name=f"{image_model_name} + {hunyuan3d_model_name}",
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                parameters={
+                    "width": width,
+                    "height": height,
+                    "steps": steps,
+                    "guidance_scale": guidance_scale,
+                    "seed": seed,
+                    "num_views": num_views,
+                    "mesh_resolution": mesh_resolution,
+                    "texture_resolution": texture_resolution,
+                    "output_format": output_format
+                },
+                output_paths=[str(image_path), mesh_path] if mesh_path else [str(image_path)],
+                metadata={"image_info": info, "mesh_info": mesh_info}
+            )
+            
+            if progress_callback:
+                progress_callback(1.0, "3D generation complete!")
+            
+            return {
+                "success": True,
+                "image": image,
+                "image_path": str(image_path),
+                "mesh_path": mesh_path,
+                "mesh_preview": preview_path,
+                "image_info": info,
+                "mesh_info": mesh_info
+            }
+            
+        except Exception as e:
+            logger.error(f"Direct 3D generation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "success": False,
+                "error": str(e),
+                "image": None,
+                "mesh_path": None
+            }

@@ -45,9 +45,78 @@ def create_settings_tab(app: Any) -> None:
 def create_model_management_subtab(app: Any) -> None:
     """Model download and management interface"""
     
+    # Store mapping of display names to model keys
+    model_name_to_key = {}
+    
+    # Define load_available_models function BEFORE using it
+    def load_available_models(search_query="", type_filter="All"):
+        """Load list of available models"""
+        try:
+            from ...config import ALL_IMAGE_MODELS, HUNYUAN3D_MODELS, VIDEO_MODELS
+            
+            models_data = []
+            
+            # Add image models
+            if type_filter in ["All", "Image"]:
+                for key, config in ALL_IMAGE_MODELS.items():
+                    if search_query.lower() in config.name.lower():
+                        try:
+                            downloaded_models = app.model_manager.get_downloaded_models("image")
+                            status = "✅ Downloaded" if str(key) in downloaded_models else "📥 Available"
+                        except:
+                            status = "📥 Available"
+                        model_name_to_key[config.name] = (key, "image")
+                        models_data.append([
+                            config.name,
+                            "Image",
+                            config.size,
+                            config.vram_required,
+                            config.description,
+                            status
+                        ])
+            
+            # Add 3D models
+            if type_filter in ["All", "3D"]:
+                for key, config in HUNYUAN3D_MODELS.items():
+                    if search_query.lower() in config["name"].lower():
+                        try:
+                            downloaded_models = app.model_manager.get_downloaded_models("3d")
+                            status = "✅ Downloaded" if str(key) in downloaded_models else "📥 Available"
+                        except:
+                            status = "📥 Available"
+                        model_name_to_key[config["name"]] = (key, "3d")
+                        models_data.append([
+                            config["name"],
+                            "3D",
+                            config["size"],
+                            config["vram_required"],
+                            config["description"],
+                            status
+                        ])
+            
+            # Add video models
+            if type_filter in ["All", "Video"]:
+                for key, config in VIDEO_MODELS.items():
+                    if search_query.lower() in config["name"].lower():
+                        model_name_to_key[config["name"]] = (key, "video")
+                        models_data.append([
+                            config["name"],
+                            "Video",
+                            config["size"],
+                            config["vram_required"],
+                            config["description"],
+                            "📥 Available"
+                        ])
+            
+            return models_data
+            
+        except Exception as e:
+            logger.error(f"Error loading models: {e}")
+            return []
+    
     with gr.Tabs() as model_tabs:
         # Download new models
-        with gr.Tab("Download Models"):
+        with gr.Tab("Download Models") as download_tab:
             gr.Markdown("### Download AI Models")
             
             # Model search and filters
@@ -64,90 +133,193 @@ def create_model_management_subtab(app: Any) -> None:
                 )
                 
                 search_btn = create_action_button("🔍 Search", size="sm")
+                refresh_list_btn = create_action_button("🔄 Refresh List", size="sm")
             
-            # Available models list
+            # Available models list - Now properly loads on creation
             available_models = gr.DataFrame(
+                value=load_available_models("", "All"), 
                 headers=["Name", "Type", "Size", "VRAM", "Description", "Status"],
                 datatype=["str", "str", "str", "str", "str", "str"],
-                col_count=6
+                col_count=6,
+                interactive=False,  # Set to False for row selection
+                elem_classes=["model-list-table"],
+                wrap=True
             )
             
             # Download controls
             with gr.Row():
                 selected_model = gr.Textbox(
                     label="Selected Model",
-                    interactive=False
+                    interactive=True,  # Make it editable as a workaround
+                    placeholder="Type or paste a model name here (e.g., FLUX.1-dev)"
                 )
                 
                 download_btn = create_action_button("📥 Download", variant="primary")
+                force_download_btn = create_action_button("🔄 Force Re-download", variant="secondary", size="sm")
                 cancel_btn = create_action_button("❌ Cancel", variant="stop", size="sm")
             
             # Download progress
             download_progress = gr.Progress()
             download_status = gr.HTML()
             
-            # Load available models
-            def load_available_models(search_query="", type_filter="All"):
-                """Load list of available models"""
+            # Real-time download progress with WebSocket
+            with gr.Group():
+                gr.Markdown("#### Download Progress")
+                current_download_info = gr.HTML(value="<p>No active downloads</p>")
+                
+                # Import WebSocket component
                 try:
-                    from ...config import ALL_IMAGE_MODELS, HUNYUAN3D_MODELS, VIDEO_MODELS
+                    from ..components.websocket_progress import create_websocket_progress
                     
-                    models_data = []
+                    # Create WebSocket progress component
+                    ws_progress = create_websocket_progress(
+                        host="localhost",
+                        port=8765,
+                        task_filter="download"
+                    )
+                    ws_progress_component = ws_progress.create_component()
                     
-                    # Add image models
-                    if type_filter in ["All", "Image"]:
-                        for key, config in ALL_IMAGE_MODELS.items():
-                            if search_query.lower() in config.name.lower():
-                                try:
-                                    downloaded_models = app.model_manager.get_downloaded_models("image")
-                                    status = "Downloaded" if str(key) in downloaded_models else "Available"
-                                except:
-                                    status = "Available"
-                                models_data.append([
-                                    config.name,
-                                    "Image",
-                                    config.size,
-                                    config.vram_required,
-                                    config.description,
-                                    status
-                                ])
+                    # Replace the HTML component with WebSocket component
+                    current_download_info = ws_progress_component
                     
-                    # Add 3D models
-                    if type_filter in ["All", "3D"]:
-                        for key, name in HUNYUAN3D_MODELS.items():
-                            if search_query.lower() in name.lower():
-                                try:
-                                    downloaded_models = app.model_manager.get_downloaded_models("3d")
-                                    status = "Downloaded" if str(key) in downloaded_models else "Available"
-                                except:
-                                    status = "Available"
-                                models_data.append([
-                                    name,
-                                    "3D",
-                                    "~7-15GB",
-                                    "16GB+",
-                                    "Hunyuan3D model for 3D generation",
-                                    status
-                                ])
+                except ImportError:
+                    logger.warning("WebSocket progress component not available, falling back to polling")
+                
+                # Keep the check_download_progress function for fallback
+                def check_download_progress():
+                    """Check current download progress (fallback for non-WebSocket)"""
+                    try:
+                        progress = app.model_manager.get_download_progress()
+                        # Only log when there's actual download activity
+                        if progress.get('status') == 'downloading' and progress.get('percentage', 0) > 0:
+                            logger.debug(f"Download progress - {progress.get('model', 'Unknown')}: {progress.get('percentage', 0):.1f}%")
+                        elif progress.get('status') not in ['idle', None]:
+                            logger.debug(f"Download status: {progress.get('status')}")
+                        
+                        if progress.get("status") == "downloading":
+                            model = progress.get("model", "Unknown")
+                            
+                            # Get detailed progress info
+                            percentage = progress.get("percentage", 0)
+                            downloaded_gb = progress.get("downloaded_gb", 0)
+                            total_gb = progress.get("total_gb", 0)
+                            current_file = progress.get("current_file", "")
+                            speed_mbps = progress.get("speed_mbps", 0)
+                            eta_minutes = progress.get("eta_minutes", 0)
+                            
+                            # File progress
+                            completed_files = progress.get("completed_files", 0)
+                            total_files = progress.get("total_files", 0)
+                            files_percentage = progress.get("files_percentage", 0)
+                            
+                            # Current file progress
+                            current_file_percentage = progress.get("current_file_percentage", 0)
+                            current_file_size_mb = progress.get("current_file_size_mb", 0)
+                            current_file_downloaded_mb = progress.get("current_file_downloaded_mb", 0)
+                            # Format the display
+                            html = f"""
+                            <div style='padding: 1rem; background: #f0f7ff; border-radius: 8px;'>
+                                <h4 style='margin: 0 0 0.5rem 0;'>📥 Downloading: {model}</h4>
+                                
+                                <!-- Overall Progress -->
+                                <div style='margin-bottom: 1rem;'>
+                                    <div style='display: flex; justify-content: space-between; margin-bottom: 0.25rem;'>
+                                        <span>Overall Progress</span>
+                                        <span>{percentage:.1f}% ({downloaded_gb:.2f} / {total_gb:.2f} GB)</span>
+                                    </div>
+                                    <div style='background: #e0e0e0; height: 20px; border-radius: 10px; overflow: hidden;'>
+                                        <div style='background: #2196F3; height: 100%; width: {percentage:.1f}%; transition: width 0.3s;'></div>
+                                    </div>
+                                </div>
+                                
+                                <!-- File Progress -->
+                                <div style='margin-bottom: 1rem;'>
+                                    <div style='display: flex; justify-content: space-between; margin-bottom: 0.25rem;'>
+                                        <span>Files</span>
+                                        <span>{completed_files} / {total_files} ({files_percentage:.1f}%)</span>
+                                    </div>
+                                    <div style='background: #e0e0e0; height: 10px; border-radius: 5px; overflow: hidden;'>
+                                        <div style='background: #4CAF50; height: 100%; width: {files_percentage:.1f}%; transition: width 0.3s;'></div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Current File -->
+                                {f'''
+                                <div style='margin-bottom: 1rem; padding: 0.5rem; background: #e8f4ff; border-radius: 4px;'>
+                                    <div style='font-size: 0.9em; margin-bottom: 0.25rem;'>
+                                        Current: {current_file.split('/')[-1] if current_file else 'Starting...'}
+                                    </div>
+                                    <div style='display: flex; justify-content: space-between; font-size: 0.85em; color: #666;'>
+                                        <span>{current_file_downloaded_mb:.1f} / {current_file_size_mb:.1f} MB</span>
+                                        <span>{current_file_percentage:.1f}%</span>
+                                    </div>
+                                    <div style='background: #d0d0d0; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 0.25rem;'>
+                                        <div style='background: #FF9800; height: 100%; width: {current_file_percentage:.1f}%; transition: width 0.3s;'></div>
+                                    </div>
+                                </div>
+                                ''' if current_file else ''}
+                                
+                                <!-- Stats -->
+                                <div style='display: flex; justify-content: space-between; font-size: 0.9em; color: #666;'>
+                                    <span>⚡ Speed: {speed_mbps:.1f} MB/s</span>
+                                    <span>⏱️ ETA: {eta_minutes:.1f} min</span>
+                                </div>
+                            </div>
+                            """
+                            return html
+                        elif progress.get("is_complete"):
+                            return "<p style='color: green;'>✅ Download completed!</p>"
+                        else:
+                            return f"<p>No active downloads (status: {progress.get('status', 'unknown')})</p>"
+                    except Exception as e:
+                        logger.error(f"Error checking progress: {e}", exc_info=True)
+                        return f"<p>Error checking progress: {str(e)}</p>"
+                
+                # Only add polling controls if WebSocket is not available
+                try:
+                    # If WebSocket is available, just add a status indicator
+                    websocket_status = gr.HTML(
+                        value="<p style='color: green; font-size: 0.9em;'>🟢 Real-time updates via WebSocket</p>"
+                    )
+                except NameError:
+                    # WebSocket not available, use polling
+                    with gr.Row():
+                        refresh_btn = create_action_button("🔄 Refresh Progress", size="sm")
+                        auto_refresh = gr.Checkbox(label="Auto-refresh (2s)", value=True, scale=1)
                     
-                    # Add video models
-                    if type_filter in ["All", "Video"]:
-                        for key, config in VIDEO_MODELS.items():
-                            if search_query.lower() in config["name"].lower():
-                                models_data.append([
-                                    config["name"],
-                                    "Video",
-                                    config["size"],
-                                    config["vram_required"],
-                                    config["description"],
-                                    "Available"
-                                ])
+                    # Create a timer that updates the progress
+                    timer = gr.Timer(value=2.0, active=True)
                     
-                    return models_data
+                    # Update progress when timer fires (only if auto-refresh is on)
+                    def update_if_auto_refresh(auto_refresh_enabled):
+                        if auto_refresh_enabled:
+                            return check_download_progress()
+                        return gr.update()
                     
+                    timer.tick(
+                        fn=update_if_auto_refresh,
+                        inputs=[auto_refresh],
+                        outputs=[current_download_info]
+                    )
+                    
+                    refresh_btn.click(
+                        fn=check_download_progress,
+                        outputs=[current_download_info]
+                    )
+                
+            # Cancel download handler
+            def cancel_download():
+                """Cancel the current download"""
+                try:
+                    message = app.model_manager.stop_download()
+                    return f"<div style='color: orange;'>⚠️ {message}</div>"
                 except Exception as e:
-                    logger.error(f"Error loading models: {e}")
-                    return []
+                    return f"<div style='color: red;'>❌ Error cancelling download: {str(e)}</div>"
+            
+            cancel_btn.click(
+                fn=cancel_download,
+                outputs=[download_status]
+            )
             
             # Wire up search
             search_btn.click(
@@ -156,8 +328,158 @@ def create_model_management_subtab(app: Any) -> None:
                 outputs=[available_models]
             )
             
-            # Don't load models synchronously - it blocks the UI
-            # available_models.value = load_available_models()
+            # Also trigger search when type filter changes
+            model_type_filter.change(
+                load_available_models,
+                inputs=[model_search, model_type_filter],
+                outputs=[available_models]
+            )
+            
+            # Wire up refresh button
+            refresh_list_btn.click(
+                load_available_models,
+                inputs=[model_search, model_type_filter],
+                outputs=[available_models]
+            )
+            
+            # Add instruction text
+            gr.Markdown("**Select a model to download:** Click on any row in the table to select a model")
+            
+            # Handle model selection (keeping this for when it works)
+            def select_model(evt: gr.SelectData, dataframe_data):
+                """Handle model selection from the DataFrame"""
+                try:
+                    # Debug logging
+                    logger.info(f"Selection event - index: {evt.index}, value: {evt.value}")
+                    
+                    if evt.index is not None:
+                        # For Gradio 5.0, evt.index is a list [row, col]
+                        if isinstance(evt.index, list) and len(evt.index) >= 1:
+                            row_idx = evt.index[0]
+                        elif isinstance(evt.index, tuple):
+                            row_idx = evt.index[0]
+                        else:
+                            row_idx = evt.index
+                        
+                        # Get the model name from the selected row
+                        # Check if dataframe_data is not empty using proper pandas method
+                        if isinstance(dataframe_data, list) and row_idx < len(dataframe_data):
+                            model_name = dataframe_data[row_idx][0]
+                            logger.info(f"Selected model: {model_name}")
+                            return model_name
+                        elif hasattr(dataframe_data, 'iloc') and not dataframe_data.empty and row_idx < len(dataframe_data):
+                            # Handle pandas DataFrame
+                            model_name = dataframe_data.iloc[row_idx, 0]
+                            logger.info(f"Selected model: {model_name}")
+                            return model_name
+                except Exception as e:
+                    logger.error(f"Error selecting model: {e}")
+                return ""
+            
+            # Try using the select event
+            available_models.select(
+                fn=select_model,
+                inputs=[available_models],
+                outputs=[selected_model],
+                queue=False
+            )
+            
+            # Handle model download
+            def download_selected_model(model_name, force=False, progress=gr.Progress()):
+                """Download the selected model"""
+                if not model_name:
+                    return "<div style='color: red;'>Please select a model first.</div>"
+                
+                try:
+                    from ...config import ALL_IMAGE_MODELS, HUNYUAN3D_MODELS, VIDEO_MODELS
+                    
+                    # Get model key and type from mapping
+                    if model_name not in model_name_to_key:
+                        return f"<div style='color: red;'>Model '{model_name}' not found. Please select from the list.</div>"
+                    
+                    model_key, model_type = model_name_to_key[model_name]
+                    
+                    # Get model config
+                    if model_type == "image":
+                        model_config = ALL_IMAGE_MODELS.get(model_key)
+                    elif model_type == "3d":
+                        model_config = HUNYUAN3D_MODELS.get(model_key)
+                    elif model_type == "video":
+                        model_config = VIDEO_MODELS.get(model_key)
+                    else:
+                        return f"<div style='color: red;'>Invalid model type: {model_type}</div>"
+                    
+                    if not model_config:
+                        return f"<div style='color: red;'>Model configuration not found for {model_name}</div>"
+                    
+                    # Start download
+                    progress(0, desc=f"Starting download of {model_name}...")
+                    
+                    # Debug logging
+                    logger.info(f"Attempting to download: {model_name} (key: {model_key}, type: {model_type})")
+                    
+                    # If force download, delete existing incomplete model first
+                    if force:
+                        import shutil
+                        if model_type == "image":
+                            model_path = app.model_manager.models_dir / "image" / model_key
+                        elif model_type == "3d":
+                            model_path = app.model_manager.models_dir / "3d" / model_key
+                        else:
+                            model_path = app.model_manager.models_dir / model_type / model_key
+                            
+                        if model_path.exists():
+                            logger.info(f"Force download: Removing existing model at {model_path}")
+                            shutil.rmtree(model_path)
+                    
+                    # Use the model manager to download (starts in background)
+                    success, message = app.model_manager.download_model(
+                        model_name=model_key,
+                        model_type=model_type,
+                        progress_callback=None  # Progress is tracked via get_download_progress instead
+                    )
+                    
+                    logger.info(f"Download result: success={success}, message={message}")
+                    
+                    # The download happens in background, so show initial status
+                    if success:
+                        return f"<div style='color: blue;'>⏳ Download started for {model_name}. Check progress below...</div>"
+                    else:
+                        return f"<div style='color: red;'>❌ {message}</div>"
+                        
+                except Exception as e:
+                    logger.error(f"Error downloading model: {e}")
+                    return f"<div style='color: red;'>❌ Error downloading model: {str(e)}</div>"
+            
+            # Wire up download button
+            download_btn.click(
+                fn=lambda model: download_selected_model(model, force=False),
+                inputs=[selected_model],
+                outputs=[download_status]
+            ).then(
+                # Immediately check progress after starting download
+                fn=check_download_progress,
+                outputs=[current_download_info]
+            ).then(
+                # After starting download, refresh the model list to update status
+                fn=lambda: load_available_models("", "All"),
+                outputs=[available_models]
+            )
+            
+            # Wire up force download button
+            force_download_btn.click(
+                fn=lambda model: download_selected_model(model, force=True),
+                inputs=[selected_model],
+                outputs=[download_status]
+            ).then(
+                # Immediately check progress after starting download
+                fn=check_download_progress,
+                outputs=[current_download_info]
+            ).then(
+                # After starting download, refresh the model list to update status
+                fn=lambda: load_available_models("", "All"),
+                outputs=[available_models]
+            )
         
         # Manage downloaded models
         with gr.Tab("Installed Models"):

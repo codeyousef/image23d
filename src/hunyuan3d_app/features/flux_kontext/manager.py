@@ -115,7 +115,7 @@ class FluxKontextManager:
                 self.flux_pipeline = FluxPipeline.from_pretrained(
                     str(kontext_model_path),
                     torch_dtype=dtype,
-                    device_map=device
+                    device_map="auto" if device == "cuda" else None
                 )
                 # Apply Kontext modifications
                 self._apply_kontext_modifications()
@@ -148,7 +148,7 @@ class FluxKontextManager:
                     self.flux_pipeline = FluxPipeline.from_pretrained(
                         str(model_path),
                         torch_dtype=dtype,
-                        device_map=device,
+                        device_map="auto" if device == "cuda" else None,
                         local_files_only=isinstance(model_path, Path)
                     )
                     
@@ -308,9 +308,23 @@ class FluxKontextManager:
                 self.current_context_embeddings = {}
                 
             # Prepare generation parameters
-            generator = torch.Generator(device=self.flux_pipeline.device)
-            if config.seed >= 0:
-                generator.manual_seed(config.seed)
+            # Check if model uses device_map
+            has_device_map = hasattr(self.flux_pipeline, 'hf_device_map') and self.flux_pipeline.hf_device_map
+            
+            if has_device_map:
+                # Don't use generator with device_map models
+                generator = None
+                # Set global seed instead
+                if config.seed >= 0:
+                    torch.manual_seed(config.seed)
+                    if torch.cuda.is_available():
+                        torch.cuda.manual_seed_all(config.seed)
+            else:
+                # Create generator on the pipeline's device
+                device = self.flux_pipeline.device if hasattr(self.flux_pipeline, 'device') else "cpu"
+                generator = torch.Generator(device=device)
+                if config.seed >= 0:
+                    generator.manual_seed(config.seed)
                 
             # Generate with context
             result = self.flux_pipeline(

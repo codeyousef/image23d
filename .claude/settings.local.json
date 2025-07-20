@@ -35,7 +35,19 @@
       "Bash(cat:*)",
       "Bash(git clone:*)",
       "Bash(pkill:*)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(wget:*)",
+      "Bash(cp:*)",
+      "Bash(md5sum:*)",
+      "Bash(sha256sum:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(.venv/Scripts/python:*)",
+      "Bash(git submodule add:*)",
+      "Bash(conda activate:*)",
+      "Bash(PYTHONPATH=/mnt/d/Projects/Python/hunyuan3d-app/src python -m hunyuan3d_app.app)",
+      "Bash(pip --version)",
+      "Bash(PYTHONPATH=src timeout 10 python -m hunyuan3d_app.app)",
+      "Bash(PYTHONPATH=/mnt/d/Projects/Python/hunyuan3d-app/src python -m pytest tests/test_core/test_studio_enhanced.py::TestHunyuan3DStudioEnhanced::test_initialization -v --tb=short)"
     ],
     "deny": []
   }
