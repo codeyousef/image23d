@@ -116,18 +116,25 @@ class HunYuan3DMultiView(MultiViewModel):
                 # For now, create placeholder
                 logger.info(f"Loading HunYuan3D multi-view model: {model_id}")
                 
-                # Download model if needed
-                if not (self.model_path / "config.json").exists():
-                    if progress_callback:
-                        progress_callback(0.3, "Downloading model files...")
+                # Skip download for now - create placeholder
+                logger.warning("Skipping model download - using placeholder implementation")
+                if progress_callback:
+                    progress_callback(0.5, "Creating placeholder model...")
+                    
+                # Create placeholder pipeline
+                class PlaceholderPipeline:
+                    def __init__(self):
+                        self.device = self.config.device if hasattr(self, 'config') else 'cuda'
+                    
+                    def __call__(self, *args, **kwargs):
+                        # Return placeholder results
+                        return None
                         
-                    snapshot_download(
-                        repo_id=model_id,
-                        local_dir=str(self.model_path),
-                        local_dir_use_symlinks=False
-                    )
+                self.pipeline = PlaceholderPipeline()
                 
-                # TODO: Load actual model
+                # TODO: Implement actual model loading
+                # if not (self.model_path / "config.json").exists():
+                #     snapshot_download(repo_id=model_id, local_dir=str(self.model_path))
                 # self.pipeline = HunYuan3DMultiViewPipeline.from_pretrained(...)
                 
             self.loaded = True
