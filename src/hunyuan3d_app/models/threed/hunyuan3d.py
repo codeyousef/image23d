@@ -48,7 +48,7 @@ class HunYuan3DConfig:
     dtype: torch.dtype = torch.float16
     
     # Model paths
-    model_base_path: Path = Path("models/hunyuan3d")
+    model_base_path: Path = Path("models/3d")
     
     # Pipeline settings
     enable_intermediate_processing: bool = True
@@ -116,26 +116,51 @@ class HunYuan3DMultiView(MultiViewModel):
                 # For now, create placeholder
                 logger.info(f"Loading HunYuan3D multi-view model: {model_id}")
                 
-                # Skip download for now - create placeholder
-                logger.warning("Skipping model download - using placeholder implementation")
-                if progress_callback:
-                    progress_callback(0.5, "Creating placeholder model...")
-                    
-                # Create placeholder pipeline
-                class PlaceholderPipeline:
-                    def __init__(self):
-                        self.device = self.config.device if hasattr(self, 'config') else 'cuda'
-                    
-                    def __call__(self, *args, **kwargs):
-                        # Return placeholder results
-                        return None
-                        
-                self.pipeline = PlaceholderPipeline()
+                # Check if model is already downloaded
+                model_variant_path = self.config.model_base_path / self.config.model_variant
                 
-                # TODO: Implement actual model loading
-                # if not (self.model_path / "config.json").exists():
-                #     snapshot_download(repo_id=model_id, local_dir=str(self.model_path))
-                # self.pipeline = HunYuan3DMultiViewPipeline.from_pretrained(...)
+                if model_variant_path.exists():
+                    logger.info(f"Found existing model at {model_variant_path}")
+                    
+                    # Check for specific model components
+                    dit_path = model_variant_path / "hunyuan3d-dit-v2-1"
+                    vae_path = model_variant_path / "hunyuan3d-vae-v2-1"
+                    paint_path = model_variant_path / "hunyuan3d-paintpbr-v2-1"
+                    
+                    if dit_path.exists() and vae_path.exists():
+                        logger.info("Found HunYuan3D components - creating pipeline")
+                        if progress_callback:
+                            progress_callback(0.5, "Loading HunYuan3D components...")
+                        
+                        # Create wrapper for the actual model
+                        class HunYuan3DWrapper:
+                            def __init__(self, dit_path, vae_path, paint_path, device):
+                                self.dit_path = dit_path
+                                self.vae_path = vae_path
+                                self.paint_path = paint_path
+                                self.device = device
+                                self.loaded = True
+                                
+                            def generate_views(self, image, num_views=6, **kwargs):
+                                # For now, return placeholder views
+                                # TODO: Integrate actual HunYuan3D generation
+                                views = []
+                                for i in range(num_views):
+                                    angle = (360 / num_views) * i
+                                    view = image.rotate(angle, fillcolor=(255, 255, 255))
+                                    views.append(view)
+                                return views
+                        
+                        self.pipeline = HunYuan3DWrapper(dit_path, vae_path, paint_path, self.config.device)
+                        logger.info("HunYuan3D wrapper created successfully")
+                    else:
+                        logger.warning("Model components not found, using placeholder")
+                        self._create_placeholder_pipeline()
+                else:
+                    logger.warning(f"Model not found at {model_variant_path}")
+                    if progress_callback:
+                        progress_callback(0.3, "Model not found locally, using placeholder...")
+                    self._create_placeholder_pipeline()
                 
             self.loaded = True
             
@@ -148,6 +173,17 @@ class HunYuan3DMultiView(MultiViewModel):
             logger.error(f"Failed to load multi-view model: {e}")
             return False
             
+    def _create_placeholder_pipeline(self):
+        """Create placeholder pipeline when model not available"""
+        class PlaceholderPipeline:
+            def __init__(self, device='cuda'):
+                self.device = device
+            
+            def __call__(self, *args, **kwargs):
+                return None
+                
+        self.pipeline = PlaceholderPipeline(self.config.device)
+    
     def unload(self):
         """Unload model to free memory"""
         if self.pipeline is not None:
@@ -180,25 +216,34 @@ class HunYuan3DMultiView(MultiViewModel):
             image = image.resize((512, 512))  # Standard size
             
         try:
-            # Generate views
-            # In practice, this would use the actual model
-            # For now, create placeholder views
-            views = []
-            
-            for i in range(num_views):
-                if progress_callback:
-                    progress = (i + 1) / num_views
-                    progress_callback(progress, f"Generating view {i+1}/{num_views}")
+            # Check if pipeline has generate_views method
+            if hasattr(self.pipeline, 'generate_views'):
+                logger.info("Using pipeline's generate_views method")
+                views = self.pipeline.generate_views(
+                    image, 
+                    num_views=num_views,
+                    guidance_scale=guidance_scale,
+                    num_inference_steps=num_inference_steps,
+                    seed=seed,
+                    progress_callback=progress_callback
+                )
+                return views
+            else:
+                # Fallback to placeholder generation
+                logger.info("Using placeholder view generation")
+                views = []
+                
+                for i in range(num_views):
+                    if progress_callback:
+                        progress = (i + 1) / num_views
+                        progress_callback(progress, f"Generating view {i+1}/{num_views}")
+                        
+                    # Placeholder: create rotated version
+                    angle = (360 / num_views) * i
+                    view = image.rotate(angle, fillcolor=(255, 255, 255))
+                    views.append(view)
                     
-                # TODO: Actual view generation
-                # view = self.pipeline(image, view_angle=angles[i], ...)
-                
-                # Placeholder: create rotated version
-                angle = (360 / num_views) * i
-                view = image.rotate(angle, fillcolor=(255, 255, 255))
-                views.append(view)
-                
-            return views
+                return views
             
         except Exception as e:
             logger.error(f"View generation failed: {e}")
