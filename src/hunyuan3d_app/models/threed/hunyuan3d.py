@@ -10,11 +10,18 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Union, Tuple
+import sys
 import torch
 import numpy as np
 from PIL import Image
 import trimesh
 from huggingface_hub import hf_hub_download, snapshot_download
+
+# Add HunYuan3D paths to sys.path
+hunyuan_base = Path(__file__).parent.parent.parent.parent.parent / "Hunyuan3D"
+if hunyuan_base.exists():
+    sys.path.insert(0, str(hunyuan_base / "hy3dshape"))
+    sys.path.insert(0, str(hunyuan_base / "hy3dpaint"))
 
 from .base import (
     Base3DPipeline,
@@ -111,56 +118,59 @@ class HunYuan3DMultiView(MultiViewModel):
                     logger.warning(f"GGUF model not found at {gguf_path}, loading standard model")
                     
             if self.pipeline is None:
-                # Load standard model
-                # In practice, this would load the actual HunYuan3D multi-view model
-                # For now, create placeholder
                 logger.info(f"Loading HunYuan3D multi-view model: {model_id}")
                 
-                # Check if model is already downloaded
-                model_variant_path = self.config.model_base_path / self.config.model_variant
-                
-                if model_variant_path.exists():
-                    logger.info(f"Found existing model at {model_variant_path}")
+                # Try to import HunYuan3D
+                try:
+                    from hy3dshape.pipelines import Hunyuan3DDiTFlowMatchingPipeline
+                    from hy3dshape.rembg import BackgroundRemover
                     
-                    # Check for specific model components
-                    dit_path = model_variant_path / "hunyuan3d-dit-v2-1"
-                    vae_path = model_variant_path / "hunyuan3d-vae-v2-1"
-                    paint_path = model_variant_path / "hunyuan3d-paintpbr-v2-1"
+                    logger.info("Successfully imported HunYuan3D modules")
                     
-                    if dit_path.exists() and vae_path.exists():
-                        logger.info("Found HunYuan3D components - creating pipeline")
-                        if progress_callback:
-                            progress_callback(0.5, "Loading HunYuan3D components...")
+                    # Check if model weights exist
+                    model_variant_path = self.config.model_base_path / self.config.model_variant
+                    
+                    if model_variant_path.exists():
+                        logger.info(f"Found existing model at {model_variant_path}")
                         
-                        # Create wrapper for the actual model
-                        class HunYuan3DWrapper:
-                            def __init__(self, dit_path, vae_path, paint_path, device):
-                                self.dit_path = dit_path
-                                self.vae_path = vae_path
-                                self.paint_path = paint_path
-                                self.device = device
-                                self.loaded = True
+                        # Check for specific model components
+                        dit_path = model_variant_path / "hunyuan3d-dit-v2-1"
+                        vae_path = model_variant_path / "hunyuan3d-vae-v2-1"
+                        
+                        if dit_path.exists() and vae_path.exists():
+                            logger.info("Found HunYuan3D components - loading pipeline")
+                            if progress_callback:
+                                progress_callback(0.5, "Loading HunYuan3D pipeline...")
+                            
+                            try:
+                                # Load the actual HunYuan3D pipeline
+                                # Use the model path directly since weights are already downloaded
+                                self.pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
+                                    str(model_variant_path),
+                                    device=self.config.device,
+                                    torch_dtype=self.config.dtype
+                                )
                                 
-                            def generate_views(self, image, num_views=6, **kwargs):
-                                # For now, return placeholder views
-                                # TODO: Integrate actual HunYuan3D generation
-                                views = []
-                                for i in range(num_views):
-                                    angle = (360 / num_views) * i
-                                    view = image.rotate(angle, fillcolor=(255, 255, 255))
-                                    views.append(view)
-                                return views
-                        
-                        self.pipeline = HunYuan3DWrapper(dit_path, vae_path, paint_path, self.config.device)
-                        logger.info("HunYuan3D wrapper created successfully")
+                                # Also initialize background remover
+                                self.bg_remover = BackgroundRemover()
+                                
+                                logger.info("HunYuan3D pipeline loaded successfully")
+                            except Exception as e:
+                                logger.error(f"Failed to load HunYuan3D pipeline: {e}")
+                                self._raise_not_implemented(f"Failed to load pipeline: {str(e)}")
+                        else:
+                            self._raise_not_implemented("Model components (dit/vae) not found")
                     else:
-                        logger.warning("Model components not found, using placeholder")
-                        self._create_placeholder_pipeline()
-                else:
-                    logger.warning(f"Model not found at {model_variant_path}")
-                    if progress_callback:
-                        progress_callback(0.3, "Model not found locally, using placeholder...")
-                    self._create_placeholder_pipeline()
+                        self._raise_not_implemented(f"Model not found at {model_variant_path}")
+                        
+                except ImportError as e:
+                    logger.error(f"Failed to import HunYuan3D modules: {e}")
+                    self._raise_not_implemented(
+                        "HunYuan3D modules not found. Please ensure:\\n"
+                        "1. Hunyuan3D repository is cloned\\n"
+                        "2. Dependencies are installed: pip install -e ./Hunyuan3D\\n"
+                        "3. Check if hy3dshape module exists"
+                    )
                 
             self.loaded = True
             
@@ -173,16 +183,15 @@ class HunYuan3DMultiView(MultiViewModel):
             logger.error(f"Failed to load multi-view model: {e}")
             return False
             
-    def _create_placeholder_pipeline(self):
-        """Create placeholder pipeline when model not available"""
-        class PlaceholderPipeline:
-            def __init__(self, device='cuda'):
-                self.device = device
-            
-            def __call__(self, *args, **kwargs):
-                return None
-                
-        self.pipeline = PlaceholderPipeline(self.config.device)
+    def _raise_not_implemented(self, reason: str):
+        """Raise error with clear message about what's not implemented"""
+        raise NotImplementedError(
+            f"HunYuan3D 2.1 generation failed: {reason}\n"
+            f"To use HunYuan3D 2.1, ensure:\n"
+            f"1. The Hunyuan3D repository is cloned\n"
+            f"2. All dependencies are installed\n"
+            f"3. Model weights are downloaded to {self.config.model_base_path}"
+        )
     
     def unload(self):
         """Unload model to free memory"""
@@ -216,34 +225,25 @@ class HunYuan3DMultiView(MultiViewModel):
             image = image.resize((512, 512))  # Standard size
             
         try:
-            # Check if pipeline has generate_views method
-            if hasattr(self.pipeline, 'generate_views'):
-                logger.info("Using pipeline's generate_views method")
-                views = self.pipeline.generate_views(
-                    image, 
-                    num_views=num_views,
-                    guidance_scale=guidance_scale,
-                    num_inference_steps=num_inference_steps,
-                    seed=seed,
-                    progress_callback=progress_callback
-                )
-                return views
-            else:
-                # Fallback to placeholder generation
-                logger.info("Using placeholder view generation")
-                views = []
-                
-                for i in range(num_views):
-                    if progress_callback:
-                        progress = (i + 1) / num_views
-                        progress_callback(progress, f"Generating view {i+1}/{num_views}")
-                        
-                    # Placeholder: create rotated version
-                    angle = (360 / num_views) * i
-                    view = image.rotate(angle, fillcolor=(255, 255, 255))
-                    views.append(view)
-                    
-                return views
+            # HunYuan3D doesn't generate multiple views directly
+            # It generates a 3D mesh from a single image
+            # For multi-view consistency, we'll return the input image
+            # The actual 3D generation happens in the reconstruction phase
+            
+            logger.info("HunYuan3D uses single image input for 3D generation")
+            
+            # Remove background if needed
+            if hasattr(self, 'bg_remover') and image.mode != 'RGBA':
+                if progress_callback:
+                    progress_callback(0.5, "Removing background...")
+                try:
+                    image = self.bg_remover(image)
+                except Exception as e:
+                    logger.warning(f"Background removal failed: {e}")
+            
+            # Return single processed image
+            # HunYuan3D will handle the multi-view generation internally
+            return [image]
             
         except Exception as e:
             logger.error(f"View generation failed: {e}")
@@ -277,18 +277,19 @@ class HunYuan3DMultiView(MultiViewModel):
 
 
 class HunYuan3DReconstruction(ReconstructionModel):
-    """Sparse-view reconstruction component"""
+    """HunYuan3D mesh generation component"""
     
     def __init__(
         self,
         config: HunYuan3DConfig,
-        model_path: Optional[Path] = None
+        model_path: Optional[Path] = None,
+        multiview_model: Optional['HunYuan3DMultiView'] = None
     ):
         self.config = config
         self.model_path = model_path or config.model_base_path / "reconstruction"
         super().__init__(self.model_path, config.device, config.dtype)
         
-        self.model = None
+        self.multiview_model = multiview_model  # Reference to multiview model with pipeline
         
     def load(self, progress_callback=None) -> bool:
         """Load reconstruction model"""
@@ -327,29 +328,62 @@ class HunYuan3DReconstruction(ReconstructionModel):
         use_normals: bool = False,
         progress_callback=None
     ) -> trimesh.Trimesh:
-        """Reconstruct 3D mesh from views"""
+        """Generate 3D mesh using HunYuan3D"""
         
         if not self.loaded:
             raise RuntimeError("Model not loaded")
             
+        # Check if we have access to the HunYuan3D pipeline
+        if not self.multiview_model or not hasattr(self.multiview_model, 'pipeline'):
+            raise RuntimeError("HunYuan3D pipeline not available in reconstruction model")
+            
         try:
-            # TODO: Actual reconstruction
-            # For now, create a simple mesh
-            
-            if progress_callback:
-                progress_callback(0.5, "Reconstructing 3D mesh...")
+            # HunYuan3D expects a single RGBA image
+            if views and len(views) > 0:
+                image = views[0]  # Use first image (should be preprocessed with bg removed)
                 
-            # Create placeholder mesh (cube)
-            mesh = trimesh.primitives.Box()
-            
-            if progress_callback:
-                progress_callback(1.0, "Reconstruction complete")
+                if progress_callback:
+                    progress_callback(0.1, "Starting HunYuan3D mesh generation...")
                 
-            return mesh
+                # Ensure image is RGBA
+                if image.mode != 'RGBA':
+                    image = image.convert('RGBA')
+                
+                # Generate mesh using HunYuan3D pipeline
+                if progress_callback:
+                    progress_callback(0.3, "Running HunYuan3D inference...")
+                
+                # Call the pipeline - it returns a list with one mesh
+                result = self.multiview_model.pipeline(image=image)
+                
+                if isinstance(result, list) and len(result) > 0:
+                    mesh = result[0]
+                    
+                    if progress_callback:
+                        progress_callback(0.9, "Processing mesh...")
+                    
+                    # Ensure it's a trimesh object
+                    if not isinstance(mesh, trimesh.Trimesh):
+                        # Convert if needed
+                        vertices = mesh.vertices if hasattr(mesh, 'vertices') else None
+                        faces = mesh.faces if hasattr(mesh, 'faces') else None
+                        if vertices is not None and faces is not None:
+                            mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+                        else:
+                            raise ValueError("Generated mesh has invalid format")
+                    
+                    if progress_callback:
+                        progress_callback(1.0, "Mesh generation complete")
+                    
+                    return mesh
+                else:
+                    raise ValueError("HunYuan3D pipeline returned no mesh")
+            else:
+                raise ValueError("No input image provided")
             
         except Exception as e:
-            logger.error(f"Reconstruction failed: {e}")
-            raise
+            logger.error(f"HunYuan3D reconstruction failed: {e}")
+            raise RuntimeError(f"3D generation failed: {str(e)}")
             
     def get_memory_usage(self) -> Dict[str, float]:
         """Get memory usage"""
@@ -447,7 +481,7 @@ class HunYuan3DPipeline(Base3DPipeline):
         
         # Initialize components
         multiview = HunYuan3DMultiView(config)
-        reconstruction = HunYuan3DReconstruction(config)
+        reconstruction = HunYuan3DReconstruction(config, multiview_model=multiview)
         texture = HunYuan3DTexture(config)
         
         # Initialize intermediate processors

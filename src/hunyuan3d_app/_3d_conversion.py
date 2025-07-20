@@ -111,8 +111,14 @@ class ThreeDConverter:
     </ul>
 </div>
 """
-                # No dummy model - fail properly
-                raise RuntimeError(f"3D conversion failed: {str(e)}")
+                # No placeholder - fail with clear message
+                raise RuntimeError(
+                    f"3D conversion failed: {str(e)}\n\n"
+                    f"To use HunYuan3D 2.1:\n"
+                    f"1. Ensure Hunyuan3D repository is available\n"
+                    f"2. Install dependencies: pip install -e ./Hunyuan3D\n"
+                    f"3. Check that model weights are in models/3d/{hunyuan3d_model_name}/"
+                )
 
         except Exception as e:
             logger.error(f"3D conversion failed: {e}")

@@ -183,19 +183,45 @@ def create_generate_3d_subtab(app: Any) -> None:
                 try:
                     import sys
                     hy3dshape_path = hunyuan3d_path / "hy3dshape"
+                    hy3dpaint_path = hunyuan3d_path / "hy3dpaint"
                     if str(hy3dshape_path) not in sys.path:
                         sys.path.insert(0, str(hy3dshape_path))
+                    if str(hy3dpaint_path) not in sys.path:
+                        sys.path.insert(0, str(hy3dpaint_path))
                     from hy3dshape.pipelines import Hunyuan3DDiTFlowMatchingPipeline
+                    
+                    # Check if model weights exist
+                    model_path = Path("models/3d") / model_name
+                    if model_path.exists():
+                        dit_path = model_path / "hunyuan3d-dit-v2-1"
+                        vae_path = model_path / "hunyuan3d-vae-v2-1"
+                        
+                        if dit_path.exists() and vae_path.exists():
+                            return f"""
+                            <div style='padding: 10px; background: #e8f5e9; border-radius: 5px;'>
+                                <strong>✅ Model Ready:</strong> {model_name} is fully operational
+                                <br><small>✓ HunYuan3D modules loaded</small>
+                                <br><small>✓ Model weights found</small>
+                            </div>
+                            """
+                        else:
+                            return f"""
+                            <div style='padding: 10px; background: #fff3e0; border-radius: 5px;'>
+                                <strong>⚠️ Incomplete Model:</strong> {model_name} weights not fully downloaded
+                                <br><small>Missing DIT or VAE components</small>
+                            </div>
+                            """
+                    else:
+                        return f"""
+                        <div style='padding: 10px; background: #ffebee; border-radius: 5px;'>
+                            <strong>❌ Model Not Found:</strong> {model_name} weights not found at {model_path}
+                        </div>
+                        """
+                except ImportError as e:
                     return f"""
-                    <div style='padding: 10px; background: #e8f5e9; border-radius: 5px;'>
-                        <strong>✅ Model Ready:</strong> {model_name} is available and should work properly
-                    </div>
-                    """
-                except ImportError:
-                    return f"""
-                    <div style='padding: 10px; background: #fff3e0; border-radius: 5px;'>
-                        <strong>⚠️ Demo Mode:</strong> {model_name} will use simplified demo generation
-                        <br><small>Hunyuan3D modules not installed. Run: <code>python install_hunyuan3d.py</code></small>
+                    <div style='padding: 10px; background: #ffebee; border-radius: 5px;'>
+                        <strong>❌ HunYuan3D Not Installed:</strong> Cannot import required modules
+                        <br><small>Run: <code>pip install -e ./Hunyuan3D</code></small>
                     </div>
                     """
             except Exception as e:
