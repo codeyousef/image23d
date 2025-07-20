@@ -1,320 +1,320 @@
+"""3D generation module using the new architecture
+
+This module provides the interface between the UI and the new 3D model system.
+It replaces the old placeholder implementation with proper HunYuan3D support.
+"""
+
 import logging
 from pathlib import Path
-from typing import Tuple, Optional, Any
-
-import gradio as gr
-import trimesh
+from typing import Dict, Any, Optional, Union, Callable
 from PIL import Image
+import time
+
+from ..models.threed.orchestrator import (
+    ThreeDOrchestrator,
+    TaskRequirements,
+    ModelCapability
+)
+from ..models.threed.base import QUALITY_PRESETS_3D
 
 logger = logging.getLogger(__name__)
 
-class ThreeDConverter:
-    def __init__(self, cache_dir: Path, output_dir: Path):
-        self.cache_dir = cache_dir
-        self.output_dir = output_dir
-        self.stop_conversion_flag = False
 
-    def stop_conversion(self):
-        """Stop the current 3D conversion process"""
-        self.stop_conversion_flag = True
-        return "3D conversion stopping... Please wait for current step to complete."
-
-    def reset_stop_flag(self):
-        """Reset the stop conversion flag"""
-        self.stop_conversion_flag = False
-
-    def convert_to_3d(
-            self,
-            hunyuan3d_model,
-            hunyuan3d_model_name,
-            image,
-            num_views,
-            mesh_resolution,
-            texture_resolution,
-            progress
-    ):
-        """Convert image to 3D model"""
+class ThreeDGenerator:
+    """Main interface for 3D generation"""
+    
+    def __init__(self):
+        self.orchestrator = ThreeDOrchestrator()
+        self.generation_count = 0
+        
+    def generate_3d(
+        self,
+        image: Union[Image.Image, str],
+        model_type: str = "auto",
+        quality_preset: str = "standard",
+        output_format: str = "glb",
+        enable_pbr: bool = False,
+        enable_depth_refinement: bool = True,
+        max_generation_time: Optional[float] = None,
+        progress_callback: Optional[Callable] = None
+    ) -> Dict[str, Any]:
+        """Generate 3D model from image
+        
+        Args:
+            image: Input image or path
+            model_type: Model to use ("auto", "hunyuan3d-21", "hunyuan3d-2mini", etc.)
+            quality_preset: Quality preset ("draft", "standard", "high", "ultra")
+            output_format: Output format ("glb", "obj", "ply", etc.)
+            enable_pbr: Enable PBR material generation
+            enable_depth_refinement: Enable depth map refinement
+            max_generation_time: Maximum time allowed for generation
+            progress_callback: Progress callback function
+            
+        Returns:
+            Dict containing:
+            - output_path: Path to generated 3D file
+            - preview_image: Preview render of 3D model
+            - generation_time: Time taken for generation
+            - model_used: Model that was used
+            - metadata: Additional generation metadata
+        """
+        
+        start_time = time.time()
+        self.generation_count += 1
+        
         try:
-            # Reset stop flag at the beginning of conversion
-            self.reset_stop_flag()
-
-            # Save input image
-            from datetime import datetime
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            input_path = self.cache_dir / f"input_{timestamp}.png"
-            image.save(input_path)
-
-            progress(0.5, desc="Converting to 3D...")
-
-            # Check if conversion should be stopped
-            if self.stop_conversion_flag:
-                return None, None, """
-<div class="warning-box">
-    <h4>⚠️ Conversion Stopped</h4>
-    <p>3D conversion was stopped by user.</p>
-</div>
-"""
-
-            # Real Hunyuan3D conversion
-            try:
-                # Check if we have the actual Hunyuan3D model
-                if hunyuan3d_model is None:
-                    # Fallback to dummy mesh if model not loaded
-                    logger.warning("Hunyuan3D model not loaded, using placeholder mesh")
-                    mesh = trimesh.creation.box()
-                    mesh_path = self.output_dir / f"mesh_{timestamp}.obj"
-                    mesh.export(mesh_path)
-                else:
-                    # Use actual Hunyuan3D pipeline
-                    logger.info(f"Running Hunyuan3D {hunyuan3d_model_name} conversion...")
+            # Validate inputs
+            if quality_preset not in QUALITY_PRESETS_3D:
+                raise ValueError(f"Invalid quality preset: {quality_preset}")
+                
+            # Load image if path provided
+            if isinstance(image, str):
+                image = Image.open(image)
+                
+            # Prepare task requirements
+            required_capabilities = [ModelCapability.IMAGE_TO_3D]
+            
+            if enable_pbr:
+                required_capabilities.append(ModelCapability.PBR_MATERIALS)
+                
+            if quality_preset in ["high", "ultra"]:
+                required_capabilities.append(ModelCapability.HIGH_RESOLUTION)
+                
+            requirements = TaskRequirements(
+                input_type="image",
+                quality_preset=quality_preset,
+                output_format=output_format,
+                required_capabilities=required_capabilities,
+                max_generation_time=max_generation_time
+            )
+            
+            # Override model selection if specific model requested
+            if model_type != "auto":
+                # Map user-friendly names to internal model types
+                model_mapping = {
+                    "hunyuan3d-21": "hunyuan3d-21",
+                    "hunyuan3d-2.1": "hunyuan3d-21",
+                    "hunyuan3d-mini": "hunyuan3d-2mini",
+                    "hunyuan3d-2mini": "hunyuan3d-2mini",
+                    "hi3dgen": "hi3dgen",
+                    "sparc3d": "sparc3d"
+                }
+                
+                internal_model = model_mapping.get(model_type.lower())
+                if internal_model:
+                    # Filter available models
+                    from ..models.threed.base import ModelType3D
+                    available_models = [
+                        m for m in self.orchestrator.available_models
+                        if m.value == internal_model
+                    ]
                     
-                    # Prepare input based on model variant
-                    if "2.1" in hunyuan3d_model_name:
-                        # Hunyuan3D 2.1 with PBR support
-                        result = self._run_hunyuan3d_21(
-                            hunyuan3d_model, image, num_views, 
-                            mesh_resolution, texture_resolution, progress
-                        )
-                    elif "mini" in hunyuan3d_model_name:
-                        # Hunyuan3D 2.0 Mini - faster but lower quality
-                        result = self._run_hunyuan3d_mini(
-                            hunyuan3d_model, image, num_views,
-                            mesh_resolution, texture_resolution, progress
-                        )
-                    elif "mv" in hunyuan3d_model_name:
-                        # Hunyuan3D 2.0 Multiview
-                        result = self._run_hunyuan3d_mv(
-                            hunyuan3d_model, image, num_views,
-                            mesh_resolution, texture_resolution, progress
-                        )
+                    if available_models:
+                        self.orchestrator.available_models = available_models
                     else:
-                        # Standard Hunyuan3D 2.0
-                        result = self._run_hunyuan3d_standard(
-                            hunyuan3d_model, image, num_views,
-                            mesh_resolution, texture_resolution, progress
-                        )
+                        logger.warning(f"Model {model_type} not available, using auto selection")
                         
-                    if result and "mesh" in result:
-                        mesh = result["mesh"]
-                        mesh_path = self.output_dir / f"mesh_{timestamp}.glb"
-                        mesh.export(mesh_path)
-                        
-                        # Save additional outputs if available
-                        if "texture" in result:
-                            texture_path = self.output_dir / f"texture_{timestamp}.png"
-                            result["texture"].save(texture_path)
-                        if "normal_map" in result:
-                            normal_path = self.output_dir / f"normal_{timestamp}.png"
-                            result["normal_map"].save(normal_path)
-                        if "pbr_maps" in result and "2.1" in hunyuan3d_model_name:
-                            # Save PBR maps for 2.1 model
-                            for map_name, map_img in result["pbr_maps"].items():
-                                map_path = self.output_dir / f"{map_name}_{timestamp}.png"
-                                map_img.save(map_path)
-                    else:
-                        # Fallback if conversion failed
-                        logger.error("Hunyuan3D conversion failed, using placeholder")
-                        mesh = trimesh.creation.box()
-                        mesh_path = self.output_dir / f"mesh_{timestamp}.obj"
-                        mesh.export(mesh_path)
-                        
-            except Exception as e:
-                logger.error(f"Error in Hunyuan3D conversion: {e}")
-                # Fallback to dummy mesh
-                mesh = trimesh.creation.box()
-                mesh_path = self.output_dir / f"mesh_{timestamp}.obj"
-                mesh.export(mesh_path)
+            # Generate 3D model
+            result = self.orchestrator.generate(
+                image,
+                requirements,
+                progress_callback
+            )
             
-            preview_path = self.output_dir / f"preview_{timestamp}.png"
-
-            # Create preview
-            import io
-            scene = mesh.scene()
-            preview_data = scene.save_image(resolution=[512, 512])
-            preview = Image.open(io.BytesIO(preview_data))
-            preview.save(preview_path)
-
-            info = f"""
-<div class="info-box">
-    <h4>✅ 3D Model Created!</h4>
-    <ul>
-        <li><strong>Model:</strong> {hunyuan3d_model_name}</li>
-        <li><strong>Views:</strong> {num_views}</li>
-        <li><strong>Mesh Resolution:</strong> {mesh_resolution}</li>
-        <li><strong>Texture Resolution:</strong> {texture_resolution}</li>
-        <li><strong>Output:</strong> {mesh_path.name}</li>
-    </ul>
-</div>
-"""
-            return str(mesh_path), preview, info
-
-        except Exception as e:
-            logger.error(f"Error converting to 3D: {str(e)}")
-            return None, None, f"❌ Error: {str(e)}"
+            # Get generation time
+            generation_time = time.time() - start_time
             
-    def _run_hunyuan3d_21(self, model, image, num_views, mesh_resolution, texture_resolution, progress):
-        """Run Hunyuan3D 2.1 with PBR material synthesis"""
-        try:
-            progress(0.6, desc="Generating multiview images...")
+            # Create preview render
+            preview_image = self._create_preview(result)
             
-            # Generate multiview images
-            multiview_images = self._generate_multiview(model, image, num_views)
-            
-            progress(0.7, desc="Reconstructing 3D mesh...")
-            
-            # Reconstruct mesh with PBR materials
-            result = {
-                "mesh": self._reconstruct_mesh(multiview_images, mesh_resolution),
-                "texture": self._generate_texture(multiview_images, texture_resolution),
-                "normal_map": self._generate_normal_map(multiview_images, texture_resolution),
-                "pbr_maps": {
-                    "metallic": self._generate_metallic_map(multiview_images, texture_resolution),
-                    "roughness": self._generate_roughness_map(multiview_images, texture_resolution),
-                    "ao": self._generate_ao_map(multiview_images, texture_resolution)
+            # Prepare response
+            return {
+                "output_path": result["output_path"],
+                "preview_image": preview_image,
+                "generation_time": generation_time,
+                "model_used": result["model_used"],
+                "metadata": {
+                    "quality_preset": quality_preset,
+                    "output_format": output_format,
+                    "enable_pbr": enable_pbr,
+                    "enable_depth_refinement": enable_depth_refinement,
+                    "selection_reason": result.get("selection_reason", ""),
+                    "memory_used_gb": result.get("memory_used_gb", 0),
+                    "quantization": result.get("quantization"),
+                    "generation_count": self.generation_count,
+                    "views_generated": len(result.get("views", [])),
                 }
             }
             
-            return result
-            
         except Exception as e:
-            logger.error(f"Hunyuan3D 2.1 conversion failed: {e}")
-            return None
+            logger.error(f"3D generation failed: {e}")
+            raise
             
-    def _run_hunyuan3d_mini(self, model, image, num_views, mesh_resolution, texture_resolution, progress):
-        """Run Hunyuan3D 2.0 Mini - fast but lower quality"""
+    def _create_preview(self, result: Dict[str, Any]) -> Optional[Image.Image]:
+        """Create preview image of 3D model"""
+        
         try:
-            progress(0.6, desc="Quick multiview generation...")
-            
-            # Faster generation with fewer views
-            multiview_images = self._generate_multiview(model, image, min(num_views, 4))
-            
-            progress(0.7, desc="Fast mesh reconstruction...")
-            
-            # Quick reconstruction
-            result = {
-                "mesh": self._reconstruct_mesh(multiview_images, min(mesh_resolution, 256)),
-                "texture": self._generate_texture(multiview_images, min(texture_resolution, 1024))
-            }
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Hunyuan3D Mini conversion failed: {e}")
-            return None
-            
-    def _run_hunyuan3d_mv(self, model, image, num_views, mesh_resolution, texture_resolution, progress):
-        """Run Hunyuan3D 2.0 Multiview - specialized for controlled views"""
-        try:
-            progress(0.6, desc="Controlled multiview generation...")
-            
-            # Generate with specific view control
-            multiview_images = self._generate_controlled_multiview(model, image, num_views)
-            
-            progress(0.7, desc="Reconstructing from controlled views...")
-            
-            result = {
-                "mesh": self._reconstruct_mesh(multiview_images, mesh_resolution),
-                "texture": self._generate_texture(multiview_images, texture_resolution),
-                "normal_map": self._generate_normal_map(multiview_images, texture_resolution)
-            }
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Hunyuan3D MV conversion failed: {e}")
-            return None
-            
-    def _run_hunyuan3d_standard(self, model, image, num_views, mesh_resolution, texture_resolution, progress):
-        """Run standard Hunyuan3D 2.0"""
-        try:
-            progress(0.6, desc="Standard multiview generation...")
-            
-            # Standard generation
-            multiview_images = self._generate_multiview(model, image, num_views)
-            
-            progress(0.7, desc="Standard mesh reconstruction...")
-            
-            result = {
-                "mesh": self._reconstruct_mesh(multiview_images, mesh_resolution),
-                "texture": self._generate_texture(multiview_images, texture_resolution)
-            }
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Hunyuan3D Standard conversion failed: {e}")
-            return None
-            
-    def _generate_multiview(self, model, image, num_views):
-        """Generate multiview images from single image"""
-        # This would use the actual Hunyuan3D multiview generation
-        # For now, create placeholder views
-        views = []
-        for i in range(num_views):
-            # In real implementation, this would generate different views
-            views.append(image)
-        return views
-        
-    def _generate_controlled_multiview(self, model, image, num_views):
-        """Generate multiview with specific camera control"""
-        # Similar to above but with explicit view control
-        return self._generate_multiview(model, image, num_views)
-        
-    def _reconstruct_mesh(self, multiview_images, resolution):
-        """Reconstruct 3D mesh from multiview images"""
-        # This would use the actual reconstruction algorithm
-        # For now, create a more complex placeholder
-        import numpy as np
-        
-        # Create a sphere as placeholder
-        phi, theta = np.mgrid[0:np.pi:complex(resolution), 0:2*np.pi:complex(resolution)]
-        x = np.sin(phi) * np.cos(theta)
-        y = np.sin(phi) * np.sin(theta)
-        z = np.cos(phi)
-        
-        vertices = np.stack([x.flatten(), y.flatten(), z.flatten()], axis=-1)
-        
-        # Create faces
-        faces = []
-        for i in range(resolution-1):
-            for j in range(resolution-1):
-                v1 = i * resolution + j
-                v2 = v1 + 1
-                v3 = (i + 1) * resolution + j
-                v4 = v3 + 1
-                faces.extend([[v1, v2, v3], [v2, v4, v3]])
+            # If we have multiple views, create a grid
+            views = result.get("views", [])
+            if views:
+                return self._create_view_grid(views)
                 
-        mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
-        return mesh
+            # Otherwise, try to render the mesh
+            mesh = result.get("mesh")
+            if mesh:
+                return self._render_mesh_preview(mesh)
+                
+            return None
+            
+        except Exception as e:
+            logger.error(f"Failed to create preview: {e}")
+            return None
+            
+    def _create_view_grid(self, views: list) -> Image.Image:
+        """Create grid of multiple views"""
         
-    def _generate_texture(self, multiview_images, resolution):
-        """Generate texture map from multiview images"""
-        # Placeholder: use first image as texture
-        if multiview_images:
-            texture = multiview_images[0].resize((resolution, resolution))
-            return texture
-        return Image.new('RGB', (resolution, resolution), color='gray')
+        if not views:
+            return None
+            
+        # Determine grid size
+        n = len(views)
+        if n == 1:
+            return views[0]
+        elif n <= 4:
+            cols, rows = 2, 2
+        elif n <= 6:
+            cols, rows = 3, 2
+        elif n <= 9:
+            cols, rows = 3, 3
+        else:
+            cols, rows = 4, 3
+            
+        # Get image size
+        img_width, img_height = views[0].size
         
-    def _generate_normal_map(self, multiview_images, resolution):
-        """Generate normal map"""
-        # Placeholder: create a simple normal map
-        normal_map = Image.new('RGB', (resolution, resolution), color=(128, 128, 255))
-        return normal_map
+        # Create grid
+        grid_width = img_width * cols
+        grid_height = img_height * rows
+        grid = Image.new('RGB', (grid_width, grid_height), (255, 255, 255))
         
-    def _generate_metallic_map(self, multiview_images, resolution):
-        """Generate metallic map for PBR"""
-        # Placeholder: create a metallic map
-        metallic = Image.new('L', (resolution, resolution), color=32)
-        return metallic
+        # Paste images
+        for i, view in enumerate(views[:cols*rows]):
+            col = i % cols
+            row = i // cols
+            x = col * img_width
+            y = row * img_height
+            grid.paste(view, (x, y))
+            
+        # Resize if too large
+        max_size = 1024
+        if grid_width > max_size or grid_height > max_size:
+            scale = min(max_size / grid_width, max_size / grid_height)
+            new_width = int(grid_width * scale)
+            new_height = int(grid_height * scale)
+            grid = grid.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+        return grid
         
-    def _generate_roughness_map(self, multiview_images, resolution):
-        """Generate roughness map for PBR"""
-        # Placeholder: create a roughness map
-        roughness = Image.new('L', (resolution, resolution), color=128)
-        return roughness
+    def _render_mesh_preview(self, mesh) -> Optional[Image.Image]:
+        """Render mesh to image"""
         
-    def _generate_ao_map(self, multiview_images, resolution):
-        """Generate ambient occlusion map"""
-        # Placeholder: create an AO map
-        ao = Image.new('L', (resolution, resolution), color=200)
-        return ao
+        try:
+            # Simple preview using trimesh
+            import trimesh
+            import numpy as np
+            
+            if isinstance(mesh, trimesh.Trimesh):
+                # Create scene
+                scene = trimesh.Scene(mesh)
+                
+                # Render to image
+                # This is a simple orthographic projection
+                # In practice, you might want to use a proper renderer
+                png = scene.save_image(resolution=[512, 512])
+                
+                # Convert to PIL Image
+                import io
+                image = Image.open(io.BytesIO(png))
+                
+                return image
+                
+        except Exception as e:
+            logger.error(f"Mesh preview failed: {e}")
+            
+        return None
+        
+    def list_available_models(self) -> list:
+        """List available 3D models"""
+        return self.orchestrator.list_available_models()
+        
+    def get_quality_presets(self) -> Dict[str, Any]:
+        """Get available quality presets"""
+        presets = {}
+        
+        for name, preset in QUALITY_PRESETS_3D.items():
+            presets[name] = {
+                "name": preset.name,
+                "multiview_steps": preset.multiview_steps,
+                "multiview_count": preset.multiview_count,
+                "reconstruction_resolution": preset.reconstruction_resolution,
+                "texture_resolution": preset.texture_resolution,
+                "features": {
+                    "pbr": preset.use_pbr,
+                    "normal_maps": preset.use_normal_maps,
+                    "depth_refinement": preset.use_depth_refinement
+                },
+                "memory_efficient": preset.memory_efficient,
+                "supports_quantization": preset.supports_quantization
+            }
+            
+        return presets
+        
+    def estimate_generation_time(
+        self,
+        model_type: str,
+        quality_preset: str
+    ) -> float:
+        """Estimate generation time in seconds"""
+        
+        # Get model profile
+        from ..models.threed.orchestrator import MODEL_PROFILES, ModelType3D
+        
+        model_type_enum = None
+        for mt in ModelType3D:
+            if mt.value == model_type:
+                model_type_enum = mt
+                break
+                
+        if model_type_enum and model_type_enum in MODEL_PROFILES:
+            profile = MODEL_PROFILES[model_type_enum]
+            return profile.performance_metrics.get(quality_preset, 60.0)
+            
+        return 60.0  # Default estimate
+        
+    def cleanup(self):
+        """Cleanup resources"""
+        self.orchestrator.unload_all()
+
+
+# Singleton instance
+_generator_instance = None
+
+
+def get_3d_generator() -> ThreeDGenerator:
+    """Get or create 3D generator instance"""
+    global _generator_instance
+    
+    if _generator_instance is None:
+        _generator_instance = ThreeDGenerator()
+        
+    return _generator_instance
+
+
+def generate_3d_model(
+    image: Union[Image.Image, str],
+    **kwargs
+) -> Dict[str, Any]:
+    """Convenience function for 3D generation"""
+    
+    generator = get_3d_generator()
+    return generator.generate_3d(image, **kwargs)

@@ -136,49 +136,94 @@ class ThreeDConverter:
         timestamp: str,
         progress
     ) -> Tuple[Path, Image.Image]:
-        """Attempt real Hunyuan3D conversion"""
+        """Use new 3D generation system for conversion"""
         
         try:
-            # Check if we have a real Hunyuan3D model loaded
-            if not hunyuan3d_model:
-                raise NotImplementedError("No Hunyuan3D model loaded")
+            # Import our new 3D generator
+            from .generation.threed import get_3d_generator, generate_3d_model
             
-            # Check if it's a placeholder or real model
-            if isinstance(hunyuan3d_model, dict) and hunyuan3d_model.get("type") == "placeholder":
-                logger.info("Using Hunyuan3D placeholder model - will create enhanced demo")
-                logger.info(f"Placeholder error: {hunyuan3d_model.get('error', 'Unknown error')}")
-                raise NotImplementedError(f"Hunyuan3D is a placeholder - actual model not loaded: {hunyuan3d_model.get('error', 'Unknown error')}")
+            progress(0.2, "Initializing 3D generation system...")
             
-            # Log what type of model we have
-            logger.info(f"Hunyuan3D model type: {type(hunyuan3d_model)}")
-            logger.info(f"Model attributes: {dir(hunyuan3d_model) if hunyuan3d_model else 'None'}")
-            
-            # Check if it's our wrapper
-            if hasattr(hunyuan3d_model, 'has_shape_pipeline'):
-                logger.info("Found Hunyuan3D wrapper object")
-                if not hunyuan3d_model.has_shape_pipeline():
-                    logger.error("Hunyuan3D wrapper exists but shape pipeline not loaded")
-                    logger.error("This usually means the hy3dshape module could not be imported")
-                    raise RuntimeError("Shape pipeline not loaded - hy3dshape module may be missing")
-                else:
-                    logger.info("Shape pipeline is loaded and ready")
-            else:
-                logger.error(f"Model does not have has_shape_pipeline method. Type: {type(hunyuan3d_model)}")
-            
-            if not hasattr(hunyuan3d_model, 'generate_mesh'):
-                raise NotImplementedError("Hunyuan3D model does not have generate_mesh method")
-            
-            progress(0.2, "Preparing image for Hunyuan3D...")
-            
+            # Map old parameters to new system
+            quality_preset = "standard"
+            if mesh_resolution >= 1024:
+                quality_preset = "high"
+            elif mesh_resolution <= 256:
+                quality_preset = "draft"
+                
             # Define a progress callback for the model
             def model_progress(p, msg):
                 # Map model progress (0-1) to our progress range (0.3-0.9)
                 progress(0.3 + p * 0.6, msg)
             
-            progress(0.3, "Generating 3D mesh with Hunyuan3D...")
+            progress(0.3, "Generating 3D model...")
+            
+            # Use new 3D generation system
+            result = generate_3d_model(
+                image=image,
+                model_type=model_name,
+                quality_preset=quality_preset,
+                output_format="glb",
+                enable_pbr=texture_resolution >= 1024,
+                enable_depth_refinement=True,
+                progress_callback=model_progress
+            )
+            
+            progress(0.9, "Processing results...")
+            
+            # Extract results
+            mesh_path = Path(result["output_path"])
+            preview_image = result.get("preview_image")
+            
+            # Save preview if available
+            preview_path = None
+            if preview_image:
+                preview_path = self.output_dir / f"preview_{timestamp}.png"
+                preview_image.save(preview_path)
+                logger.info(f"Saved preview to {preview_path}")
+                preview_path = str(preview_path)
+            
+            progress(1.0, "3D conversion complete!")
+            
+            return mesh_path, preview_path
+            
+        except ImportError as e:
+            logger.error(f"Failed to import new 3D generation system: {e}")
+            # Fall back to checking if we have old-style model
+            if hasattr(hunyuan3d_model, 'generate_mesh'):
+                return self._convert_with_legacy_model(
+                    hunyuan3d_model, model_name, image, 
+                    num_views, mesh_resolution, texture_resolution,
+                    timestamp, progress
+                )
+            else:
+                raise RuntimeError("3D generation system not available")
+            
+        except Exception as e:
+            logger.error(f"3D generation error: {e}")
+            raise
+    
+    def _convert_with_legacy_model(
+        self,
+        hunyuan3d_model: Any,
+        model_name: str,
+        image: Image.Image,
+        num_views: int,
+        mesh_resolution: int,
+        texture_resolution: int,
+        timestamp: str,
+        progress
+    ) -> Tuple[Path, Image.Image]:
+        """Legacy conversion for old model format"""
+        
+        try:
+            progress(0.3, "Using legacy Hunyuan3D model...")
+            
+            # Define a progress callback for the model
+            def model_progress(p, msg):
+                progress(0.3 + p * 0.6, msg)
             
             # Generate mesh directly from image
-            # Hunyuan3D generates the mesh in one step
             mesh_data = hunyuan3d_model.generate_mesh(
                 image,
                 progress_callback=model_progress
@@ -191,13 +236,11 @@ class ThreeDConverter:
             preview_path = self.output_dir / f"preview_{timestamp}.png"
             
             # Save the mesh data
-            # mesh_data should be a trimesh object from Hunyuan3D
             try:
                 mesh_data.export(str(mesh_path))
                 logger.info(f"Saved mesh to {mesh_path}")
             except Exception as e:
                 logger.error(f"Failed to export mesh: {e}")
-                # Try alternative export format
                 mesh_path = self.output_dir / f"hunyuan3d_{timestamp}.obj"
                 mesh_data.export(str(mesh_path))
                 logger.info(f"Saved mesh as OBJ to {mesh_path}")
@@ -213,7 +256,7 @@ class ThreeDConverter:
             return mesh_path, str(preview_path)
             
         except Exception as e:
-            logger.error(f"Hunyuan3D conversion error: {e}")
+            logger.error(f"Legacy model conversion error: {e}")
             raise
 
     def _prepare_image_for_hunyuan3d(self, image: Image.Image) -> torch.Tensor:
@@ -256,161 +299,7 @@ class ThreeDConverter:
         
         return mesh
 
-    # REMOVED: No dummy models allowed
-    '''def _create_enhanced_dummy_model(
-        self,
-        image: Image.Image,
-        model_name: str,
-        num_views: int,
-        mesh_resolution: int,
-        texture_resolution: int,
-        timestamp: str,
-        progress
-    ) -> Tuple[str, Image.Image, str]:
-        """Create an enhanced dummy 3D model when real conversion fails"""
-        
-        logger.info(f"[CREATE_ENHANCED_DUMMY_MODEL] Creating demo model because Hunyuan3D failed")
-        logger.info(f"[CREATE_ENHANCED_DUMMY_MODEL] Input image - size: {image.size}, mode: {image.mode}")
-        progress(0.4, "Creating enhanced demo model...")
-        
-        # Analyze input image to create a more relevant shape
-        mesh = self._create_shape_from_image_analysis(image, mesh_resolution)
-        
-        progress(0.7, "Applying image-based texturing...")
-        
-        # Apply the input image as texture
-        mesh = self._apply_image_texture(mesh, image, texture_resolution)
-        
-        progress(0.9, "Finalizing model...")
-        
-        # Save mesh
-        mesh_path = self.output_dir / f"enhanced_demo_{timestamp}.glb"
-        mesh.export(mesh_path)
-        
-        # Create preview and save it
-        preview = self._create_preview_image(mesh)
-        preview_path = None
-        if preview:
-            preview_path = self.output_dir / f"preview_{timestamp}.png"
-            preview.save(preview_path)
-            preview_path = str(preview_path)
-        
-        info = f"""
-<div class="info-box" style="padding: 15px; background: #fff3e0; border-radius: 8px; border-left: 4px solid #ff9800;">
-    <h4>🔧 Enhanced Demo Model Created</h4>
-    <div style="margin: 10px 0;">
-        <p><strong>Note:</strong> This is an enhanced demonstration model created because full Hunyuan3D integration is still in development.</p>
-        <strong>📊 Model Details:</strong>
-        <ul style="margin: 8px 0; padding-left: 20px;">
-            <li><strong>Model:</strong> {model_name} (Demo Mode)</li>
-            <li><strong>Shape Analysis:</strong> Auto-detected from input image</li>
-            <li><strong>Texture:</strong> Applied from input image</li>
-            <li><strong>Vertices:</strong> {len(mesh.vertices):,}</li>
-            <li><strong>Faces:</strong> {len(mesh.faces):,}</li>
-        </ul>
-    </div>
-    <div style="margin-top: 15px; padding: 10px; background: rgba(255, 152, 0, 0.1); border-radius: 4px;">
-        <strong>🚀 Coming Soon:</strong> Full Hunyuan3D integration with real multi-view generation and advanced 3D reconstruction.
-    </div>
-</div>
-"""
-        
-        progress(1.0, "Enhanced demo model complete!")
-        return str(mesh_path), preview_path, info
-
-    def _create_shape_from_image_analysis(self, image: Image.Image, resolution: int) -> trimesh.Trimesh:
-        """Analyze image to determine appropriate 3D shape"""
-        try:
-            # Convert to numpy for analysis
-            img_array = np.array(image.convert('RGB'))
-            
-            # Simple analysis: check image dimensions and content
-            height, width = img_array.shape[:2]
-            aspect_ratio = width / height
-            logger.info(f"[CREATE_ENHANCED_DUMMY_MODEL] Image array shape: {img_array.shape}")
-            logger.info(f"[CREATE_ENHANCED_DUMMY_MODEL] Image mean RGB: {img_array.mean(axis=(0,1)).astype(int).tolist()}")
-            
-            # Analyze color distribution and edges
-            gray = np.mean(img_array, axis=2)
-            edges = np.gradient(gray)
-            edge_strength = np.mean(np.abs(edges))
-            
-            # Determine shape based on analysis - create higher resolution meshes
-            if aspect_ratio > 1.5:
-                # Wide image - create high-res cylinder
-                mesh = trimesh.creation.cylinder(radius=1, height=0.5, sections=64)
-            elif aspect_ratio < 0.7:
-                # Tall image - create subdivided elongated shape
-                mesh = trimesh.creation.box(extents=[0.8, 0.8, 2.0])
-                mesh = mesh.subdivide()  # Increase resolution
-                mesh = mesh.subdivide()  # More vertices
-            elif edge_strength > 20:  # High detail image
-                # Complex edges - create high-res icosphere for organic shapes
-                mesh = trimesh.creation.icosphere(subdivisions=4, radius=1)
-            else:
-                # Default - create a more detailed shape
-                # Start with icosphere for better default shape
-                mesh = trimesh.creation.icosphere(subdivisions=3, radius=1)
-                # Apply some deformation to make it less spherical
-                mesh.vertices[:, 0] *= 1.2  # Stretch X
-                mesh.vertices[:, 1] *= 1.2  # Stretch Y
-                mesh.vertices[:, 2] *= 0.8  # Compress Z slightly
-            
-            # Ensure we have enough vertices
-            while len(mesh.vertices) < resolution // 2:
-                mesh = mesh.subdivide()
-            
-            # Apply smoothing for organic look
-            if len(mesh.vertices) > 100:
-                mesh = mesh.smoothed()
-            
-            # Final scale adjustment
-            scale_factor = 2.0  # Make it a reasonable size
-            mesh.apply_scale(scale_factor)
-            
-            return mesh
-            
-        except Exception as e:
-            logger.warning(f"[CREATE_ENHANCED_DUMMY_MODEL] Image analysis failed, using default shape: {e}")
-            return trimesh.creation.box(extents=[1, 1, 1])
-
-    def _apply_image_texture(self, mesh: trimesh.Trimesh, image: Image.Image, resolution: int) -> trimesh.Trimesh:
-        """Apply input image as texture to the mesh"""
-        try:
-            # Resize image to texture resolution
-            texture_img = image.resize((resolution, resolution), Image.Resampling.LANCZOS)
-            
-            # Generate UV coordinates if not present
-            if not hasattr(mesh.visual, 'uv') or mesh.visual.uv is None:
-                # Simple spherical UV mapping
-                vertices = mesh.vertices
-                
-                # Normalize vertices
-                center = vertices.mean(axis=0)
-                vertices_centered = vertices - center
-                
-                # Spherical coordinates
-                x, y, z = vertices_centered.T
-                u = 0.5 + np.arctan2(z, x) / (2 * np.pi)
-                v = 0.5 - np.arcsin(y / np.linalg.norm(vertices_centered, axis=1)) / np.pi
-                
-                uv = np.column_stack([u, v])
-            else:
-                uv = mesh.visual.uv
-            
-            # Apply texture
-            mesh.visual = trimesh.visual.TextureVisuals(
-                uv=uv,
-                image=texture_img
-            )
-            
-            return mesh
-            
-        except Exception as e:
-            logger.warning(f"Texture application failed: {e}")
-            return mesh
-
-    def _create_preview_image(self, mesh: trimesh.Trimesh) -> Image.Image:
+    def _create_preview_image(self, mesh: trimesh.Trimesh) -> Optional[Image.Image]:
         """Create a preview image of the 3D mesh"""
         try:
             # Try to render with trimesh
@@ -484,7 +373,7 @@ class ThreeDConverter:
     def _create_info_preview(self, mesh: trimesh.Trimesh) -> Image.Image:
         """Create an informational preview when rendering fails"""
         try:
-            from PIL import ImageDraw, ImageFont
+            from PIL import ImageDraw
             
             # Create gradient background
             img = Image.new('RGB', (512, 512), color='lightblue')
@@ -521,7 +410,6 @@ class ThreeDConverter:
             # Ultimate fallback
             img = Image.new('RGB', (512, 512), color='lightgray')
             return img
-    '''
 
     def get_supported_formats(self) -> List[str]:
         """Get list of supported export formats"""
