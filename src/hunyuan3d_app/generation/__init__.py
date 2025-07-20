@@ -2,10 +2,12 @@
 
 from .image import ImageGenerator
 from .video import VideoGenerator
-from .threed import ThreeDConverter
+from .threed import ThreeDGenerator, get_3d_generator, generate_3d_model
 
 __all__ = [
     "ImageGenerator",
     "VideoGenerator",
-    "ThreeDConverter"
+    "ThreeDGenerator",
+    "get_3d_generator",
+    "generate_3d_model"
 ]

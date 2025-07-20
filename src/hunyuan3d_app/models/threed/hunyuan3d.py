@@ -33,7 +33,7 @@ from .intermediate import (
     TextureSynthesizer,
     PBRMaterialGenerator
 )
-from ..gguf_wrapper import GGUFModelWrapper
+from ..gguf_wrapper import StandaloneGGUFPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +100,8 @@ class HunYuan3DMultiView(MultiViewModel):
                 if gguf_path.exists():
                     logger.info(f"Loading GGUF model from {gguf_path}")
                     # Load with GGUF wrapper
-                    from ..gguf_wrapper import GGUFModelWrapper
-                    self.pipeline = GGUFModelWrapper(
+                    from ..gguf_wrapper import StandaloneGGUFPipeline
+                    self.pipeline = StandaloneGGUFPipeline(
                         model_path=str(gguf_path),
                         model_type="hunyuan3d_mv",
                         device=self.config.device

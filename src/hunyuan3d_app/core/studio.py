@@ -8,7 +8,7 @@ from PIL import Image
 
 from ..models.manager import ModelManager
 from ..generation.image import ImageGenerator
-from ..generation.threed import ThreeDConverter
+# from ..generation.threed import ThreeDConverter  # Replaced by new 3D system
 from ..utils.system import SystemRequirementsChecker, get_system_requirements_html
 
 from ..config import (
@@ -37,7 +37,7 @@ class Hunyuan3DStudio:
 
         self.model_manager = ModelManager(MODELS_DIR, Path(__file__).parent / "models")
         self.image_generator = ImageGenerator(self.device, OUTPUT_DIR)
-        self.three_d_converter = ThreeDConverter(CACHE_DIR, OUTPUT_DIR)
+        # self.three_d_converter = ThreeDConverter(CACHE_DIR, OUTPUT_DIR)  # Replaced by new 3D system
 
     def set_hf_token(self, token):
         return self.model_manager.set_hf_token(token)
