@@ -454,8 +454,17 @@ class HunYuan3DReconstruction(ReconstructionModel):
             raise RuntimeError("Model not loaded")
             
         # Check if we have access to the HunYuan3D pipeline
-        if not self.multiview_model or not hasattr(self.multiview_model, 'pipeline'):
-            raise RuntimeError("HunYuan3D pipeline not available in reconstruction model")
+        if not self.multiview_model:
+            raise RuntimeError("Multiview model not available in reconstruction model")
+        
+        if not hasattr(self.multiview_model, 'pipeline'):
+            raise RuntimeError("Multiview model has no pipeline attribute")
+            
+        logger.info(f"Multiview model pipeline: {self.multiview_model.pipeline}")
+        logger.info(f"Multiview model pipeline type: {type(self.multiview_model.pipeline)}")
+        
+        if self.multiview_model.pipeline is None:
+            raise RuntimeError("HunYuan3D pipeline is None in multiview model")
             
         try:
             # HunYuan3D expects a single RGBA image
@@ -474,6 +483,7 @@ class HunYuan3DReconstruction(ReconstructionModel):
                     progress_callback(0.3, "Running HunYuan3D inference...")
                 
                 # Call the pipeline - it returns List[List[trimesh.Trimesh]]
+                # The pipeline object has a __call__ method, so we call it directly
                 result = self.multiview_model.pipeline(
                     image=image,
                     num_inference_steps=50,  # Default steps
