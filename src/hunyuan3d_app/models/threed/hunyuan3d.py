@@ -25,7 +25,12 @@ if hunyuan_base.exists():
     sys.path.insert(0, str(hunyuan_base / "hy3dpaint"))
 
 # Set environment variable for HunYuan3D models
-os.environ['HY3DGEN_MODELS'] = str(Path(__file__).parent.parent.parent.parent.parent / "models" / "3d")
+# Use forward slashes for cross-platform compatibility
+models_path = Path(__file__).parent.parent.parent.parent.parent / "models" / "3d"
+# Ensure the path is absolute and uses forward slashes
+models_path_str = str(models_path.resolve()).replace('\\', '/')
+os.environ['HY3DGEN_MODELS'] = models_path_str
+logger.info(f"Set HY3DGEN_MODELS to: {models_path_str}")
 
 from .base import (
     Base3DPipeline,
@@ -70,6 +75,14 @@ class HunYuan3DConfig:
     sequential_offload: bool = False
     cpu_offload: bool = False
     attention_slicing: bool = True
+    
+    def __post_init__(self):
+        """Fix paths after initialization"""
+        # Convert to absolute path
+        if not self.model_base_path.is_absolute():
+            # Get the project root (5 levels up from this file)
+            project_root = Path(__file__).parent.parent.parent.parent.parent
+            self.model_base_path = (project_root / self.model_base_path).resolve()
     
     def get_model_id(self) -> str:
         """Get HuggingFace model ID"""
@@ -133,6 +146,20 @@ class HunYuan3DMultiView(MultiViewModel):
                     
                     # Check if model weights exist
                     model_variant_path = self.config.model_base_path / self.config.model_variant
+                    
+                    # Log paths for debugging
+                    logger.info(f"Looking for model at: {model_variant_path}")
+                    logger.info(f"Absolute path: {model_variant_path.resolve()}")
+                    logger.info(f"Path exists: {model_variant_path.exists()}")
+                    logger.info(f"HY3DGEN_MODELS env: {os.environ.get('HY3DGEN_MODELS', 'not set')}")
+                    logger.info(f"Current working directory: {os.getcwd()}")
+                    logger.info(f"model_base_path type: {type(self.config.model_base_path)}")
+                    
+                    # Try to list parent directory
+                    if self.config.model_base_path.exists():
+                        logger.info(f"Contents of {self.config.model_base_path}:")
+                        for item in self.config.model_base_path.iterdir():
+                            logger.info(f"  - {item.name}")
                     
                     if model_variant_path.exists():
                         logger.info(f"Found existing model at {model_variant_path}")
@@ -229,7 +256,9 @@ class HunYuan3DMultiView(MultiViewModel):
                         else:
                             self._raise_not_implemented("Model components (dit/vae) not found")
                     else:
-                        self._raise_not_implemented(f"Model not found at {model_variant_path}")
+                        # Use forward slashes in error message for clarity
+                        path_str = str(model_variant_path).replace('\\', '/')
+                        self._raise_not_implemented(f"Model not found at {path_str}")
                         
                 except ImportError as e:
                     logger.error(f"Failed to import HunYuan3D modules: {e}")
