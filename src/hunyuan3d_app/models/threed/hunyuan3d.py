@@ -227,6 +227,14 @@ class HunYuan3DMultiView(MultiViewModel):
                                 logger.info(f"Pipeline type: {type(self.pipeline)}")
                                 logger.info(f"Pipeline attributes: {dir(self.pipeline)[:10]}...")  # First 10 attrs
                                 
+                                # Mark as loaded here since pipeline was created successfully
+                                self.loaded = True
+                                
+                                if progress_callback:
+                                    progress_callback(1.0, "Multi-view model loaded")
+                                
+                                return True
+                                
                             except Exception as e:
                                 logger.error(f"Failed to load HunYuan3D pipeline: {e}")
                                 logger.error(f"Error type: {type(e).__name__}")
@@ -287,17 +295,9 @@ class HunYuan3DMultiView(MultiViewModel):
                         "3. Check if hy3dshape module exists"
                     )
                 
-            # Mark as loaded if pipeline was created
-            self.loaded = (self.pipeline is not None)
-            
-            if not self.loaded:
-                logger.error("Pipeline was not created - model not loaded")
-                return False
-            
-            if progress_callback:
-                progress_callback(1.0, "Multi-view model loaded")
-                
-            return True
+            # If we get here, something went wrong
+            logger.error("Failed to load HunYuan3D model")
+            return False
             
         except Exception as e:
             logger.error(f"Failed to load multi-view model: {e}")
