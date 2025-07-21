@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Union, Tuple
 import sys
+import os
 import torch
 import numpy as np
 from PIL import Image
@@ -22,6 +23,9 @@ hunyuan_base = Path(__file__).parent.parent.parent.parent.parent / "Hunyuan3D"
 if hunyuan_base.exists():
     sys.path.insert(0, str(hunyuan_base / "hy3dshape"))
     sys.path.insert(0, str(hunyuan_base / "hy3dpaint"))
+
+# Set environment variable for HunYuan3D models
+os.environ['HY3DGEN_MODELS'] = str(Path(__file__).parent.parent.parent.parent.parent / "models" / "3d")
 
 from .base import (
     Base3DPipeline,
@@ -139,25 +143,89 @@ class HunYuan3DMultiView(MultiViewModel):
                         
                         if dit_path.exists() and vae_path.exists():
                             logger.info("Found HunYuan3D components - loading pipeline")
+                            logger.info(f"DIT path: {dit_path}")
+                            logger.info(f"VAE path: {vae_path}")
+                            
                             if progress_callback:
                                 progress_callback(0.5, "Loading HunYuan3D pipeline...")
                             
                             try:
-                                # Load the actual HunYuan3D pipeline
-                                # Use the model path directly since weights are already downloaded
+                                # Check if we need to use the dit/vae paths directly
+                                logger.info(f"Attempting to load pipeline from: {model_variant_path}")
+                                
+                                # Try loading with specific component paths
+                                import torch
+                                
+                                # The HunYuan3D pipeline expects just the model name
+                                # Since we set HY3DGEN_MODELS environment variable
                                 self.pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
-                                    str(model_variant_path),
+                                    self.config.model_variant,  # Just "hunyuan3d-21"
+                                    subfolder="hunyuan3d-dit-v2-1",  # DIT subfolder
                                     device=self.config.device,
-                                    torch_dtype=self.config.dtype
+                                    dtype=self.config.dtype,
+                                    use_safetensors=False,  # We have .ckpt files
+                                    variant="fp16"  # Our models are fp16
                                 )
                                 
+                                # Move to device
+                                if hasattr(self.pipeline, 'to'):
+                                    self.pipeline = self.pipeline.to(self.config.device)
+                                
                                 # Also initialize background remover
-                                self.bg_remover = BackgroundRemover()
+                                try:
+                                    self.bg_remover = BackgroundRemover()
+                                except Exception as e:
+                                    logger.warning(f"Failed to initialize background remover: {e}")
+                                    self.bg_remover = None
                                 
                                 logger.info("HunYuan3D pipeline loaded successfully")
+                                logger.info(f"Pipeline type: {type(self.pipeline)}")
+                                logger.info(f"Pipeline attributes: {dir(self.pipeline)[:10]}...")  # First 10 attrs
+                                
                             except Exception as e:
                                 logger.error(f"Failed to load HunYuan3D pipeline: {e}")
-                                self._raise_not_implemented(f"Failed to load pipeline: {str(e)}")
+                                logger.error(f"Error type: {type(e).__name__}")
+                                import traceback
+                                logger.error(f"Traceback: {traceback.format_exc()}")
+                                
+                                # Try alternative loading method
+                                logger.info("Trying alternative loading method...")
+                                try:
+                                    # Maybe it expects a config file
+                                    config_path = dit_path / "config.yaml"
+                                    if config_path.exists():
+                                        logger.info(f"Found config at: {config_path}")
+                                        # Try loading with config
+                                        from omegaconf import OmegaConf
+                                        config = OmegaConf.load(config_path)
+                                        logger.info(f"Config loaded: {config}")
+                                    
+                                    # Try manual initialization
+                                    from hy3dshape.models import DiT_hy_v2_1
+                                    from hy3dshape.scheduler import PNDMScheduler
+                                    
+                                    # Load model manually
+                                    model = DiT_hy_v2_1()
+                                    ckpt_path = dit_path / "model.fp16.ckpt"
+                                    if ckpt_path.exists():
+                                        logger.info(f"Loading checkpoint from: {ckpt_path}")
+                                        state_dict = torch.load(ckpt_path, map_location=self.config.device)
+                                        model.load_state_dict(state_dict)
+                                        model = model.to(self.config.device, dtype=self.config.dtype)
+                                        
+                                        # Create pipeline wrapper
+                                        self.pipeline = type('Pipeline', (), {
+                                            'model': model,
+                                            '__call__': lambda self, image, **kwargs: self.model(image, **kwargs)
+                                        })()
+                                        
+                                        logger.info("Loaded model manually")
+                                    else:
+                                        raise FileNotFoundError(f"Checkpoint not found at {ckpt_path}")
+                                        
+                                except Exception as e2:
+                                    logger.error(f"Alternative loading also failed: {e2}")
+                                    self._raise_not_implemented(f"Failed to load pipeline: {str(e)}")
                         else:
                             self._raise_not_implemented("Model components (dit/vae) not found")
                     else:
@@ -172,7 +240,12 @@ class HunYuan3DMultiView(MultiViewModel):
                         "3. Check if hy3dshape module exists"
                     )
                 
-            self.loaded = True
+            # Mark as loaded if pipeline was created
+            self.loaded = (self.pipeline is not None)
+            
+            if not self.loaded:
+                logger.error("Pipeline was not created - model not loaded")
+                return False
             
             if progress_callback:
                 progress_callback(1.0, "Multi-view model loaded")
@@ -353,11 +426,20 @@ class HunYuan3DReconstruction(ReconstructionModel):
                 if progress_callback:
                     progress_callback(0.3, "Running HunYuan3D inference...")
                 
-                # Call the pipeline - it returns a list with one mesh
-                result = self.multiview_model.pipeline(image=image)
+                # Call the pipeline - it returns List[List[trimesh.Trimesh]]
+                result = self.multiview_model.pipeline(
+                    image=image,
+                    num_inference_steps=50,  # Default steps
+                    guidance_scale=7.5,      # Default guidance
+                    output_type="trimesh"
+                )
                 
                 if isinstance(result, list) and len(result) > 0:
-                    mesh = result[0]
+                    # Extract the first mesh from the nested list structure
+                    if isinstance(result[0], list) and len(result[0]) > 0:
+                        mesh = result[0][0]  # First batch, first mesh
+                    else:
+                        mesh = result[0]  # Direct mesh
                     
                     if progress_callback:
                         progress_callback(0.9, "Processing mesh...")
@@ -365,12 +447,16 @@ class HunYuan3DReconstruction(ReconstructionModel):
                     # Ensure it's a trimesh object
                     if not isinstance(mesh, trimesh.Trimesh):
                         # Convert if needed
-                        vertices = mesh.vertices if hasattr(mesh, 'vertices') else None
-                        faces = mesh.faces if hasattr(mesh, 'faces') else None
-                        if vertices is not None and faces is not None:
+                        logger.warning(f"Got unexpected mesh type: {type(mesh)}")
+                        if hasattr(mesh, 'vertices') and hasattr(mesh, 'faces'):
+                            vertices = mesh.vertices
+                            faces = mesh.faces
                             mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
                         else:
-                            raise ValueError("Generated mesh has invalid format")
+                            raise ValueError(f"Generated mesh has invalid format: {type(mesh)}")
+                    
+                    # Log mesh info
+                    logger.info(f"Generated mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
                     
                     if progress_callback:
                         progress_callback(1.0, "Mesh generation complete")
@@ -513,17 +599,24 @@ class HunYuan3DPipeline(Base3DPipeline):
                 progress = i / total_steps
                 progress_callback(progress, f"Loading {component}...")
                 
-            if component == "multiview" and self.multiview_model:
-                if not self.multiview_model.load():
-                    return False
-                    
-            elif component == "reconstruction" and self.reconstruction_model:
-                if not self.reconstruction_model.load():
-                    return False
-                    
-            elif component == "texture" and self.texture_model:
-                if not self.texture_model.load():
-                    return False
+            try:
+                if component == "multiview" and self.multiview_model:
+                    if not self.multiview_model.load(progress_callback):
+                        logger.error(f"Failed to load {component}")
+                        return False
+                        
+                elif component == "reconstruction" and self.reconstruction_model:
+                    if not self.reconstruction_model.load(progress_callback):
+                        logger.error(f"Failed to load {component}")
+                        return False
+                        
+                elif component == "texture" and self.texture_model:
+                    if not self.texture_model.load(progress_callback):
+                        logger.error(f"Failed to load {component}")
+                        return False
+            except Exception as e:
+                logger.error(f"Exception loading {component}: {e}")
+                return False
                     
         if progress_callback:
             progress_callback(1.0, "All models loaded")
