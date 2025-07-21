@@ -200,19 +200,28 @@ class ModelSelector:
     ) -> Tuple[Optional[ModelType3D], str]:
         """Select best model for task"""
         
+        logger.info(f"Selecting model for requirements: capabilities={[c.value for c in requirements.required_capabilities]}, "
+                   f"quality={requirements.quality_preset}, format={requirements.output_format}")
+        logger.info(f"Available models: {[m.value for m in available_models]}")
+        
         candidates = []
+        reasons = []
         
         for model_type in available_models:
             profile = MODEL_PROFILES.get(model_type)
             if not profile:
+                reasons.append(f"{model_type.value}: No profile found")
                 continue
                 
             # Check capabilities
-            if not all(cap in profile.capabilities for cap in requirements.required_capabilities):
+            missing_caps = [cap for cap in requirements.required_capabilities if cap not in profile.capabilities]
+            if missing_caps:
+                reasons.append(f"{model_type.value}: Missing capabilities {[c.value for c in missing_caps]}")
                 continue
                 
             # Check format support
             if requirements.output_format not in profile.supported_formats:
+                reasons.append(f"{model_type.value}: Format '{requirements.output_format}' not supported")
                 continue
                 
             # Check memory requirements
@@ -242,7 +251,8 @@ class ModelSelector:
             candidates.append((model_type, score, profile))
             
         if not candidates:
-            return None, "No suitable model found for requirements"
+            logger.warning(f"No suitable model found. Reasons: {reasons}")
+            return None, f"No suitable model found. Issues: {'; '.join(reasons)}"
             
         # Sort by score and select best
         candidates.sort(key=lambda x: x[1], reverse=True)
@@ -467,8 +477,15 @@ class ThreeDOrchestrator:
             # Load only essential components
             components = ["multiview", "reconstruction"]
             logger.warning("Limited memory - loading only essential components")
+        
+        # Add progress callback wrapper
+        def load_progress(progress, message):
+            logger.info(f"Loading HunYuan3D: {message} ({progress*100:.0f}%)")
             
-        model.load(components)
+        success = model.load(components, progress_callback=load_progress)
+        if not success:
+            raise RuntimeError("Failed to load HunYuan3D model")
+            
         return model
         
     def _load_hunyuan3d_mini(self) -> HunYuan3DModel:
@@ -480,7 +497,10 @@ class ThreeDOrchestrator:
             device="cuda" if torch.cuda.is_available() else "cpu"
         )
         
-        model.load()
+        success = model.load()
+        if not success:
+            raise RuntimeError("Failed to load HunYuan3D mini model")
+            
         return model
         
     def list_available_models(self) -> List[Dict[str, Any]]:
