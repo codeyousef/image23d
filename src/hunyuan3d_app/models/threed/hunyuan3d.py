@@ -18,6 +18,9 @@ from PIL import Image
 import trimesh
 from huggingface_hub import hf_hub_download, snapshot_download
 
+# Setup logger early
+logger = logging.getLogger(__name__)
+
 # Add HunYuan3D paths to sys.path
 hunyuan_base = Path(__file__).parent.parent.parent.parent.parent / "Hunyuan3D"
 if hunyuan_base.exists():
@@ -50,8 +53,6 @@ from .intermediate import (
     PBRMaterialGenerator
 )
 from ..gguf_wrapper import StandaloneGGUFPipeline
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
