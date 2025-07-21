@@ -186,17 +186,34 @@ class HunYuan3DMultiView(MultiViewModel):
                                 
                                 # The HunYuan3D pipeline expects just the model name
                                 # Since we set HY3DGEN_MODELS environment variable
-                                self.pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
-                                    self.config.model_variant,  # Just "hunyuan3d-21"
-                                    subfolder="hunyuan3d-dit-v2-1",  # DIT subfolder
-                                    device=self.config.device,
-                                    dtype=self.config.dtype,
-                                    use_safetensors=False,  # We have .ckpt files
-                                    variant="fp16"  # Our models are fp16
-                                )
+                                logger.info("Calling Hunyuan3DDiTFlowMatchingPipeline.from_pretrained...")
+                                try:
+                                    pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
+                                        self.config.model_variant,  # Just "hunyuan3d-21"
+                                        subfolder="hunyuan3d-dit-v2-1",  # DIT subfolder
+                                        device=self.config.device,
+                                        dtype=self.config.dtype,
+                                        use_safetensors=False,  # We have .ckpt files
+                                        variant="fp16"  # Our models are fp16
+                                    )
+                                    logger.info(f"Pipeline returned: {pipeline}")
+                                    logger.info(f"Pipeline type after creation: {type(pipeline)}")
+                                    
+                                    # Check if pipeline was created successfully
+                                    if pipeline is None:
+                                        raise RuntimeError("Pipeline.from_pretrained returned None")
+                                    
+                                    self.pipeline = pipeline
+                                    logger.info(f"self.pipeline assigned: {self.pipeline}")
+                                except Exception as e:
+                                    logger.error(f"Exception during pipeline creation: {e}")
+                                    logger.error(f"Exception type: {type(e).__name__}")
+                                    import traceback
+                                    logger.error(f"Full traceback: {traceback.format_exc()}")
+                                    raise
                                 
-                                # Move to device
-                                if hasattr(self.pipeline, 'to'):
+                                # Move to device if needed
+                                if hasattr(self.pipeline, 'to') and self.pipeline is not None:
                                     self.pipeline = self.pipeline.to(self.config.device)
                                 
                                 # Also initialize background remover

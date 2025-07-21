@@ -473,18 +473,21 @@ class ModelLoader:
                         logger.info(f"Contents: {list(actual_model_path.iterdir())}")
                         raise FileNotFoundError(f"Could not find Hunyuan3D DIT model files in {actual_model_path}")
                 
-                # Use the proper Hunyuan3D wrapper
-                from .hunyuan3d_wrapper import load_hunyuan3d_model
+                # Use the new 3D generation system
+                from ..generation.threed import get_3d_generator
                 
                 if progress_callback:
                     progress_callback(0.4, "Loading Hunyuan3D model with full inference support...")
                 
-                model, status = load_hunyuan3d_model(
-                    actual_model_path, 
-                    model_version, 
-                    device,
-                    lambda p, msg: progress_callback(0.4 + p * 0.5, msg) if progress_callback else None
-                )
+                # Return a simple model info dict for now
+                # The actual 3D generation will use the new system
+                model = {
+                    'name': model_name,
+                    'path': str(actual_model_path),
+                    'version': model_version,
+                    'type': '3d'
+                }
+                status = f"Hunyuan3D {model_version} ready (using new generation system)"
                 
                 if model:
                     logger.info(f"Successfully loaded Hunyuan3D model {model_name}: {status}")
