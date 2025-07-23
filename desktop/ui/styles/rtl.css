@@ -1,0 +1,185 @@
+/* RTL (Right-to-Left) support styles */
+
+/* Global RTL class */
+.dir-rtl {
+    direction: rtl;
+    text-align: right;
+}
+
+/* Fix flexbox layouts for RTL */
+.dir-rtl .flex-row,
+.dir-rtl .q-row,
+.dir-rtl .row {
+    flex-direction: row-reverse;
+}
+
+/* Fix margins and paddings */
+.dir-rtl .ml-2 { margin-left: 0; margin-right: 0.5rem; }
+.dir-rtl .mr-2 { margin-right: 0; margin-left: 0.5rem; }
+.dir-rtl .ml-4 { margin-left: 0; margin-right: 1rem; }
+.dir-rtl .mr-4 { margin-right: 0; margin-left: 1rem; }
+.dir-rtl .pl-2 { padding-left: 0; padding-right: 0.5rem; }
+.dir-rtl .pr-2 { padding-right: 0; padding-left: 0.5rem; }
+.dir-rtl .pl-4 { padding-left: 0; padding-right: 1rem; }
+.dir-rtl .pr-4 { padding-right: 0; padding-left: 1rem; }
+
+/* Fix icons in buttons */
+.dir-rtl .q-btn__content {
+    flex-direction: row-reverse;
+}
+
+/* Fix text alignment in inputs */
+.dir-rtl input,
+.dir-rtl textarea,
+.dir-rtl .q-field__native {
+    text-align: right;
+    direction: rtl;
+}
+
+/* Fix select dropdowns */
+.dir-rtl .q-select__dropdown-icon {
+    order: -1;
+}
+
+/* Fix tabs */
+.dir-rtl .q-tabs {
+    direction: rtl;
+}
+
+.dir-rtl .q-tab {
+    flex-direction: row-reverse;
+}
+
+/* Fix navigation sidebar */
+.dir-rtl .navigation-item {
+    flex-direction: row-reverse;
+    text-align: right;
+}
+
+.dir-rtl .navigation-icon {
+    margin-left: 0.5rem;
+    margin-right: 0;
+}
+
+/* Fix sliders */
+.dir-rtl .q-slider {
+    direction: ltr;  /* Keep slider direction LTR for consistency */
+}
+
+/* Fix progress bars */
+.dir-rtl .q-linear-progress {
+    direction: ltr;  /* Keep progress direction LTR */
+}
+
+/* Fix tooltips */
+.dir-rtl .q-tooltip {
+    text-align: right;
+}
+
+/* Fix cards */
+.dir-rtl .q-card__section {
+    text-align: right;
+}
+
+/* Fix lists */
+.dir-rtl .q-item__section--side {
+    margin-left: 16px;
+    margin-right: 0;
+}
+
+.dir-rtl .q-item__section--avatar {
+    margin-left: 16px;
+    margin-right: 0;
+}
+
+/* Fix checkboxes and radio buttons */
+.dir-rtl .q-checkbox__inner,
+.dir-rtl .q-radio__inner {
+    margin-left: 8px;
+    margin-right: 0;
+}
+
+/* Fix expansion items */
+.dir-rtl .q-expansion-item__toggle-icon {
+    margin-left: 0;
+    margin-right: 8px;
+}
+
+/* Arabic-specific font adjustments */
+.dir-rtl {
+    font-size: 1.05em;  /* Slightly larger for better readability */
+    line-height: 1.8;   /* More line height for Arabic text */
+}
+
+/* Fix grid layouts */
+.dir-rtl .grid {
+    direction: rtl;
+}
+
+/* Fix breadcrumbs */
+.dir-rtl .q-breadcrumbs__separator {
+    transform: scaleX(-1);
+}
+
+/* Fix floating action buttons */
+.dir-rtl .q-page-sticky--bottom-right {
+    right: auto;
+    left: 18px;
+}
+
+.dir-rtl .q-page-sticky--top-right {
+    right: auto;
+    left: 18px;
+}
+
+/* Fix dialogs */
+.dir-rtl .q-dialog__inner {
+    text-align: right;
+}
+
+/* Fix notifications */
+.dir-rtl .q-notification {
+    text-align: right;
+}
+
+/* Fix tables */
+.dir-rtl .q-table th,
+.dir-rtl .q-table td {
+    text-align: right;
+}
+
+.dir-rtl .q-table__sort-icon {
+    margin-left: 0;
+    margin-right: 4px;
+}
+
+/* Fix pagination */
+.dir-rtl .q-pagination {
+    direction: ltr;  /* Keep pagination LTR for number consistency */
+}
+
+/* Fix avatar positions */
+.dir-rtl .q-avatar {
+    margin-left: 8px;
+    margin-right: 0;
+}
+
+/* Fix chat/message bubbles */
+.dir-rtl .q-message-sent {
+    flex-direction: row-reverse;
+}
+
+.dir-rtl .q-message-received {
+    flex-direction: row;
+}
+
+/* Fix timeline */
+.dir-rtl .q-timeline__dot {
+    right: 0;
+    left: auto;
+}
+
+.dir-rtl .q-timeline__content {
+    padding-right: 24px;
+    padding-left: 0;
+}

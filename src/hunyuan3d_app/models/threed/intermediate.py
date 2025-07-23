@@ -269,23 +269,83 @@ class UVUnwrapper(IntermediateProcessor):
             return self._simple_unwrap(mesh, texture_size)
             
     def _simple_unwrap(self, mesh: trimesh.Trimesh, texture_size: int) -> Dict[str, Any]:
-        """Simple planar UV unwrapping fallback"""
+        """Simple UV unwrapping fallback using spherical mapping"""
         
-        vertices = mesh.vertices
-        faces = mesh.faces
-        
-        # Simple planar projection
-        uv = np.zeros((len(vertices), 2))
-        
-        # Project to XY plane and normalize
-        uv[:, 0] = (vertices[:, 0] - vertices[:, 0].min()) / (vertices[:, 0].max() - vertices[:, 0].min())
-        uv[:, 1] = (vertices[:, 1] - vertices[:, 1].min()) / (vertices[:, 1].max() - vertices[:, 1].min())
-        
-        return {
-            "uv": uv,
-            "faces": faces,
-            "texture_size": texture_size
-        }
+        try:
+            vertices = mesh.vertices
+            faces = mesh.faces
+            
+            # Validate mesh
+            if len(vertices) == 0:
+                logger.warning("Mesh has no vertices, creating default UV mapping")
+                return {
+                    "uv": np.array([[0.5, 0.5]]),
+                    "faces": np.array([[0, 0, 0]]),
+                    "texture_size": texture_size
+                }
+            
+            # Create UV coordinates using spherical mapping for better coverage
+            uv = np.zeros((len(vertices), 2))
+            
+            # Normalize vertices to unit sphere
+            center = vertices.mean(axis=0)
+            centered = vertices - center
+            distances = np.linalg.norm(centered, axis=1, keepdims=True)
+            distances[distances == 0] = 1  # Avoid division by zero
+            normalized = centered / distances
+            
+            # Spherical mapping with better handling of poles
+            # U coordinate from azimuth angle
+            uv[:, 0] = 0.5 + np.arctan2(normalized[:, 2], normalized[:, 0]) / (2 * np.pi)
+            
+            # V coordinate from elevation angle with clamping
+            # Clamp Y values to avoid arcsin domain errors
+            y_clamped = np.clip(normalized[:, 1], -0.999, 0.999)
+            uv[:, 1] = 0.5 + np.arcsin(y_clamped) / np.pi
+            
+            # Fix seam issues by wrapping U coordinates
+            # Detect vertices on the seam (where U jumps from ~1 to ~0)
+            for face in faces:
+                u_values = uv[face, 0]
+                if np.max(u_values) - np.min(u_values) > 0.5:
+                    # Face crosses the seam, adjust U coordinates
+                    for i, vertex_idx in enumerate(face):
+                        if uv[vertex_idx, 0] < 0.25:
+                            # Create a duplicate vertex with wrapped U
+                            new_vertex_idx = len(uv)
+                            new_uv = uv[vertex_idx].copy()
+                            new_uv[0] += 1.0
+                            uv = np.vstack([uv, new_uv.reshape(1, -1)])
+                            # Update face to use new vertex
+                            face[i] = new_vertex_idx
+            
+            # Ensure UV coordinates are in [0, 1] range
+            uv = np.clip(uv, 0, 1)
+            
+            logger.info(f"Simple UV unwrap complete: {len(uv)} UV coordinates for {len(vertices)} vertices")
+            
+            return {
+                "uv": uv,
+                "faces": faces,
+                "texture_size": texture_size
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in simple UV unwrapping: {e}")
+            # Return basic planar mapping as last resort
+            vertices = mesh.vertices
+            if len(vertices) > 0:
+                # Simple planar projection
+                uv = vertices[:, :2] - vertices[:, :2].min(axis=0)
+                uv = uv / (uv.max() + 1e-8)
+            else:
+                uv = np.array([[0.5, 0.5]])
+                
+            return {
+                "uv": uv,
+                "faces": mesh.faces,
+                "texture_size": texture_size
+            }
 
 
 class TextureSynthesizer(IntermediateProcessor):
@@ -311,8 +371,8 @@ class TextureSynthesizer(IntermediateProcessor):
             resolution: Output texture resolution
         """
         
-        # Create texture atlas
-        texture = Image.new('RGB', (resolution, resolution), color=(128, 128, 128))
+        # Create texture atlas with better default color
+        texture = Image.new('RGB', (resolution, resolution), color=(200, 200, 200))  # Light gray instead of dark
         
         try:
             # Get UV coordinates
@@ -323,10 +383,21 @@ class TextureSynthesizer(IntermediateProcessor):
                 
             # Simple texture projection
             # In practice, this would use view-dependent texture mapping
-            if views:
-                # Use first view as base texture (simplified)
-                base_view = views[0].resize((resolution, resolution))
-                texture = base_view
+            if views and len(views) > 0:
+                # Use first view as base texture
+                base_view = views[0]
+                
+                # Ensure proper color mode
+                if base_view.mode == 'RGBA':
+                    # Convert RGBA to RGB with white background
+                    background = Image.new('RGB', base_view.size, (255, 255, 255))
+                    background.paste(base_view, mask=base_view.split()[3] if base_view.mode == 'RGBA' else None)
+                    base_view = background
+                elif base_view.mode != 'RGB':
+                    base_view = base_view.convert('RGB')
+                    
+                # Resize to texture resolution
+                texture = base_view.resize((resolution, resolution), Image.Resampling.LANCZOS)
                 
             # TODO: Implement proper multi-view texture synthesis
             # This would involve:
@@ -466,3 +537,89 @@ class PBRMaterialGenerator(IntermediateProcessor):
         ao = (ao * 255).astype(np.uint8)
         
         return Image.fromarray(ao, mode='L')
+
+
+class IntermediateOutputHandler:
+    """Handles saving and loading of intermediate outputs during 3D generation."""
+    
+    def __init__(self, output_dir: Optional[Any] = None):
+        """Initialize the intermediate output handler.
+        
+        Args:
+            output_dir: Directory to save intermediate outputs
+        """
+        from pathlib import Path
+        
+        if output_dir is None:
+            output_dir = Path("outputs/intermediate")
+        elif not isinstance(output_dir, Path):
+            output_dir = Path(output_dir)
+            
+        self.output_dir = output_dir
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+    def save_multiview_images(self, images: List[Image.Image], prefix: str = "view") -> List[str]:
+        """Save multi-view images.
+        
+        Args:
+            images: List of PIL images
+            prefix: Filename prefix
+            
+        Returns:
+            List of saved file paths
+        """
+        paths = []
+        for i, img in enumerate(images):
+            path = self.output_dir / f"{prefix}_{i:03d}.png"
+            img.save(path)
+            paths.append(str(path))
+        logger.debug(f"Saved {len(images)} multi-view images to {self.output_dir}")
+        return paths
+        
+    def save_depth_maps(self, depth_maps: List[np.ndarray], prefix: str = "depth") -> List[str]:
+        """Save depth maps.
+        
+        Args:
+            depth_maps: List of depth arrays
+            prefix: Filename prefix
+            
+        Returns:
+            List of saved file paths
+        """
+        paths = []
+        for i, depth in enumerate(depth_maps):
+            path = self.output_dir / f"{prefix}_{i:03d}.npy"
+            np.save(path, depth)
+            paths.append(str(path))
+        logger.debug(f"Saved {len(depth_maps)} depth maps to {self.output_dir}")
+        return paths
+        
+    def save_mesh(self, mesh: trimesh.Trimesh, filename: str = "mesh.obj") -> str:
+        """Save mesh to file.
+        
+        Args:
+            mesh: Trimesh object
+            filename: Output filename
+            
+        Returns:
+            Path to saved file
+        """
+        path = self.output_dir / filename
+        mesh.export(path)
+        logger.debug(f"Saved mesh to {path}")
+        return str(path)
+        
+    def save_texture(self, texture: Image.Image, filename: str = "texture.png") -> str:
+        """Save texture image.
+        
+        Args:
+            texture: PIL Image
+            filename: Output filename
+            
+        Returns:
+            Path to saved file
+        """
+        path = self.output_dir / filename
+        texture.save(path)
+        logger.debug(f"Saved texture to {path}")
+        return str(path)

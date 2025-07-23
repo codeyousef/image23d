@@ -141,7 +141,7 @@ def create_generate_3d_subtab(app: Any) -> None:
         # Model status indicator
         with gr.Row():
             model_status = gr.HTML(value="""
-            <div style='padding: 10px; background: #e3f2fd; border-radius: 5px; margin-bottom: 10px;'>
+            <div style='padding: 10px; background: #e3f2fd; border-radius: 5px; margin-bottom: 10px; color: #1565c0;'>
                 <strong>ℹ️ Model Status:</strong> Select a 3D model to see its status
             </div>
             """)

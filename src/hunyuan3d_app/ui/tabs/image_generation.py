@@ -15,6 +15,17 @@ logger = logging.getLogger(__name__)
 def create_image_generation_tab(app: Any) -> None:
     """Create the unified image generation tab with all image-related features"""
     
+    # Pre-fetch models to ensure they're available
+    try:
+        downloaded_models = app.model_manager.get_downloaded_models("image")
+        logger.info(f"Pre-fetched image models: {downloaded_models}")
+    except Exception as e:
+        logger.error(f"Error pre-fetching models: {e}")
+        downloaded_models = []
+    
+    # Store models in app for access by subtabs
+    app._cached_image_models = downloaded_models
+    
     with gr.Row():
         # Main content area
         with gr.Column(scale=4):
@@ -72,10 +83,6 @@ def create_generate_image_subtab(app: Any) -> None:
     """Create the main image generation interface"""
     
     with gr.Column():
-        # Get downloaded models
-        downloaded_models = app.model_manager.get_downloaded_models("image")
-        default_model = downloaded_models[0] if downloaded_models else None
-        
         # Prompt inputs
         prompt = gr.Textbox(
             label="Prompt",
@@ -89,20 +96,23 @@ def create_generate_image_subtab(app: Any) -> None:
             lines=2
         )
         
-        # Model selection
+        # Model selection - use cached models
         with gr.Row():
-            if downloaded_models:
-                model_dropdown = gr.Dropdown(
-                    choices=downloaded_models,
-                    value=default_model,
-                    label="Model"
-                )
-            else:
-                model_dropdown = gr.Dropdown(
-                    choices=[],
-                    label="Model (No models downloaded - visit Settings)",
-                    interactive=False
-                )
+            # Use cached models from parent tab
+            cached_models = getattr(app, '_cached_image_models', [])
+            
+            # Log for debugging
+            logger.info(f"Creating dropdown with models: {cached_models}")
+            
+            model_dropdown = gr.Dropdown(
+                label="Model" if cached_models else "Model (No models downloaded - visit Model Management)",
+                choices=cached_models,
+                value=cached_models[0] if cached_models else None,
+                interactive=bool(cached_models)
+            )
+            
+            # Add refresh button
+            refresh_btn = gr.Button("🔄 Refresh", scale=0)
             
             # LoRA selection (if available)
             available_loras = app.get_available_loras()
@@ -238,6 +248,25 @@ def create_generate_image_subtab(app: Any) -> None:
             inputs=inputs,
             outputs=[output_image, generation_info]
         )
+        
+        # Add refresh functionality
+        def refresh_model_choices():
+            """Refresh model dropdown with available models"""
+            try:
+                downloaded_models = app.model_manager.get_downloaded_models("image")
+                logger.info(f"Refreshed models: {downloaded_models}")
+                if downloaded_models:
+                    # Update cached models
+                    app._cached_image_models = downloaded_models
+                    return gr.update(choices=downloaded_models, value=downloaded_models[0], interactive=True)
+                else:
+                    return gr.update(choices=[], value=None, label="Model (No models downloaded - visit Settings)", interactive=False)
+            except Exception as e:
+                logger.error(f"Error refreshing model choices: {e}")
+                return gr.update(choices=[], value=None, label="Model (Error loading models)", interactive=False)
+        
+        # Connect refresh button
+        refresh_btn.click(refresh_model_choices, outputs=[model_dropdown])
 
 
 def create_edit_image_subtab(app: Any) -> None:
@@ -268,20 +297,12 @@ def create_edit_image_subtab(app: Any) -> None:
             info="Lower = more similar to original, Higher = more changes"
         )
         
-        # Model selection
-        downloaded_models = app.model_manager.get_downloaded_models("image")
-        if downloaded_models:
-            model_dropdown = gr.Dropdown(
-                choices=downloaded_models,
-                value=downloaded_models[0],
-                label="Model"
-            )
-        else:
-            model_dropdown = gr.Dropdown(
-                choices=[],
-                label="Model (No models downloaded)",
-                interactive=False
-            )
+        # Model selection - create dropdown that will be populated dynamically
+        model_dropdown = gr.Dropdown(
+            label="Model",
+            choices=[],  # Will be populated on load
+            value=None
+        )
         
         # Basic settings
         with gr.Row():
@@ -312,6 +333,7 @@ def create_edit_image_subtab(app: Any) -> None:
             inputs=[input_image, edit_prompt, edit_strength, model_dropdown, steps, guidance, seed],
             outputs=[output_image, edit_info]
         )
+        
 
 
 def create_remove_background_subtab(app: Any) -> None:
@@ -585,20 +607,12 @@ def create_image_variations_subtab(app: Any) -> None:
             lines=2
         )
         
-        # Model selection
-        downloaded_models = app.model_manager.get_downloaded_models("image")
-        if downloaded_models:
-            model_dropdown = gr.Dropdown(
-                choices=downloaded_models,
-                value=downloaded_models[0],
-                label="Model"
-            )
-        else:
-            model_dropdown = gr.Dropdown(
-                choices=[],
-                label="Model (No models downloaded)",
-                interactive=False
-            )
+        # Model selection - create dropdown that will be populated dynamically
+        model_dropdown = gr.Dropdown(
+            label="Model",
+            choices=[],  # Will be populated on load
+            value=None
+        )
         
         # Generate button
         generate_btn = create_action_button("🎲 Generate Variations", variant="primary")
@@ -664,20 +678,12 @@ def create_extend_image_subtab(app: Any) -> None:
             lines=2
         )
         
-        # Model selection
-        downloaded_models = app.model_manager.get_downloaded_models("image")
-        if downloaded_models:
-            model_dropdown = gr.Dropdown(
-                choices=downloaded_models,
-                value=downloaded_models[0],
-                label="Model"
-            )
-        else:
-            model_dropdown = gr.Dropdown(
-                choices=[],
-                label="Model (No models downloaded)",
-                interactive=False
-            )
+        # Model selection - create dropdown that will be populated dynamically
+        model_dropdown = gr.Dropdown(
+            label="Model",
+            choices=[],  # Will be populated on load
+            value=None
+        )
         
         # Extend button
         extend_btn = create_action_button("↔️ Extend Image", variant="primary")

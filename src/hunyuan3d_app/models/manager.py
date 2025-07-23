@@ -283,7 +283,9 @@ class ModelManager(BaseModelManager):
         # Check for safetensors or bin files
         has_weights = (
             len(list(model_path.glob("*.safetensors"))) > 0 or
-            len(list(model_path.glob("*.bin"))) > 0
+            len(list(model_path.glob("*.bin"))) > 0 or
+            len(list(model_path.glob("**/*.safetensors"))) > 0 or  # Check recursively
+            len(list(model_path.glob("**/*.bin"))) > 0  # Check recursively
         )
         
         return has_weights
@@ -352,6 +354,64 @@ class ModelManager(BaseModelManager):
             progress_callback=logging_progress_callback,
             specific_files=specific_files
         )
+    
+    def download_model_concurrent(
+        self,
+        model_name: str,
+        model_type: str,
+        progress_callback: Optional[Any] = None,
+        priority: int = 0
+    ) -> Tuple[bool, str, str]:
+        """Download a model with concurrent support.
+        
+        Returns:
+            Tuple of (success, message, download_id)
+        """
+        # Get model info
+        all_models = self.get_available_models(model_type)
+        if model_name not in all_models:
+            return False, f"Unknown model: {model_name}", ""
+        
+        model_info = all_models[model_name]
+        
+        # Determine target directory
+        if model_type == "image":
+            target_dir = self.models_dir / "image" / model_name
+        elif model_type == "3d":
+            target_dir = self.models_dir / "3d" / model_name
+        else:
+            target_dir = self.models_dir / model_type / model_name
+        
+        # Check if already downloaded
+        is_complete = self.check_model_complete(target_dir, model_type, model_name)
+        if is_complete:
+            return True, f"{model_name} is already downloaded", ""
+        
+        # Check if this is a GGUF model that needs specific files
+        specific_files = None
+        if model_name in GGUF_IMAGE_MODELS:
+            model_config = GGUF_IMAGE_MODELS[model_name]
+            if hasattr(model_config, 'gguf_file') and model_config.gguf_file:
+                specific_files = [model_config.gguf_file, "README.md", "LICENSE.md"]
+        
+        # Use concurrent download
+        return self.downloader.download_model_concurrent(
+            repo_id=model_info.repo_id,
+            model_name=model_name,
+            model_type=model_type,
+            target_dir=target_dir,
+            progress_callback=progress_callback,
+            specific_files=specific_files,
+            priority=priority
+        )
+    
+    def get_download_status(self) -> Dict[str, Any]:
+        """Get status of all downloads."""
+        return {
+            'active': self.downloader.get_active_downloads(),
+            'queued': self.downloader.get_download_queue(),
+            'max_concurrent': self.downloader.max_concurrent_downloads
+        }
     
     def load_model(self, model_name: str, **kwargs) -> Tuple[bool, str]:
         """Load a model by name.
@@ -561,6 +621,8 @@ class ModelManager(BaseModelManager):
         """
         downloaded = []
         
+        logger.debug(f"Checking for downloaded {model_type} models in {self.models_dir}")
+        
         if model_type == "image":
             # Check both regular image models and GGUF models
             models_to_check = ALL_IMAGE_MODELS
@@ -644,6 +706,63 @@ class ModelManager(BaseModelManager):
                                 generic_name = f"GGUF-{dir_name}"
                                 if generic_name not in downloaded:
                                     downloaded.append(generic_name)
+            
+            # Also check the models/image directory for any models that are downloaded but don't match exact names
+            image_dir = self.models_dir / "image"
+            if image_dir.exists():
+                logger.debug(f"Checking image directory: {image_dir}")
+                for subdir in image_dir.iterdir():
+                    if subdir.is_dir():
+                        logger.debug(f"Checking subdirectory: {subdir.name}")
+                        # Check if this is a complete model
+                        if self.check_model_complete(subdir, "image", subdir.name):
+                            logger.debug(f"Model {subdir.name} is complete")
+                            # Try to match with known models
+                            matched = False
+                            dir_name = subdir.name
+                            
+                            # Check for exact match first
+                            if dir_name in models_to_check and dir_name not in downloaded:
+                                downloaded.append(dir_name)
+                                matched = True
+                            else:
+                                # Try flexible matching for FLUX models
+                                for model_name in models_to_check.keys():
+                                    # Direct mapping for known directory names
+                                    dir_to_model_map = {
+                                        "FLUX.1-dev": "FLUX.1-dev",
+                                        "FLUX.1-dev-Q6": "FLUX.1-dev-Q6", 
+                                        "FLUX.1-dev-Q8": "FLUX.1-dev-Q8",
+                                        "flux1-dev": "FLUX.1-dev",
+                                        "flux-dev": "FLUX.1-dev",
+                                    }
+                                    
+                                    if dir_name in dir_to_model_map and dir_to_model_map[dir_name] == model_name:
+                                        if model_name not in downloaded:
+                                            downloaded.append(model_name)
+                                        matched = True
+                                        break
+                                    
+                                    # Handle FLUX model variations with regex
+                                    if "FLUX" in model_name and "FLUX" in dir_name:
+                                        # Check if it's the same quantization
+                                        import re
+                                        model_q = re.search(r'Q\d+(?:_K)?(?:_[SM])?', model_name)
+                                        dir_q = re.search(r'Q\d+(?:_K)?(?:_[SM])?', dir_name)
+                                        
+                                        if model_q and dir_q and model_q.group() == dir_q.group():
+                                            if model_name not in downloaded:
+                                                downloaded.append(model_name)
+                                            matched = True
+                                            break
+                                        elif not model_q and not dir_q:
+                                            # Both are non-quantized FLUX models
+                                            if ("dev" in model_name.lower() and "dev" in dir_name.lower()) or \
+                                               ("schnell" in model_name.lower() and "schnell" in dir_name.lower()):
+                                                if model_name not in downloaded:
+                                                    downloaded.append(model_name)
+                                                matched = True
+                                                break
                                     
         elif model_type == "3d":
             models_to_check = HUNYUAN3D_MODELS
@@ -747,3 +866,139 @@ class ModelManager(BaseModelManager):
                 <p>Could not retrieve storage information: {str(e)}</p>
             </div>
             """
+    
+    def download_video_model(self, model_name: str):
+        """Download a video model (compatibility method)."""
+        # Use the concurrent download system
+        success, message, download_id = self.download_model_concurrent(
+            model_name=model_name,
+            model_type="video",
+            priority=1
+        )
+        
+        # Yield single result for compatibility
+        if success:
+            yield f"<div style='color: #059669;'>{message}</div>"
+        else:
+            yield f"<div style='color: #dc3545;'>{message}</div>"
+    
+    def download_ip_adapter_model(self, model_name: str):
+        """Download an IP adapter model (compatibility method)."""
+        # Use the concurrent download system
+        success, message, download_id = self.download_model_concurrent(
+            model_name=model_name,
+            model_type="ip_adapter",
+            priority=1
+        )
+        
+        # Yield single result for compatibility
+        if success:
+            yield f"<div style='color: #059669;'>{message}</div>"
+        else:
+            yield f"<div style='color: #dc3545;'>{message}</div>"
+    
+    def download_face_swap_model(self, model_name: str):
+        """Download a face swap model (compatibility method)."""
+        # Use the concurrent download system
+        success, message, download_id = self.download_model_concurrent(
+            model_name=model_name,
+            model_type="face_swap",
+            priority=1
+        )
+        
+        # Yield single result for compatibility
+        if success:
+            yield f"<div style='color: #059669;'>{message}</div>"
+        else:
+            yield f"<div style='color: #dc3545;'>{message}</div>"
+    
+    def download_face_restore_model(self, model_name: str):
+        """Download a face restore model (compatibility method)."""
+        # Use the concurrent download system
+        success, message, download_id = self.download_model_concurrent(
+            model_name=model_name,
+            model_type="face_restore",
+            priority=1
+        )
+        
+        # Yield single result for compatibility
+        if success:
+            yield f"<div style='color: #059669;'>{message}</div>"
+        else:
+            yield f"<div style='color: #dc3545;'>{message}</div>"
+    
+    def download_texture_component(
+        self,
+        component_name: str,
+        component_info: Dict[str, Any],
+        priority: int = 1
+    ) -> Tuple[bool, str, str]:
+        """Download a texture pipeline component.
+        
+        Args:
+            component_name: Name of the component
+            component_info: Component configuration dict
+            priority: Download priority
+            
+        Returns:
+            Tuple of (success, message, download_id)
+        """
+        component_type = component_info.get('type', 'model')
+        
+        if component_type == 'dependency':
+            # Handle pip dependencies
+            pip_package = component_info.get('pip_package', '')
+            if not pip_package:
+                return False, f"No pip package specified for {component_name}", ""
+            
+            # Install pip package
+            import subprocess
+            try:
+                result = subprocess.run(
+                    ["pip", "install", pip_package],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                return True, f"Successfully installed {pip_package}", ""
+            except subprocess.CalledProcessError as e:
+                return False, f"Failed to install {pip_package}: {e.stderr}", ""
+        
+        elif component_type == 'model':
+            # Handle model downloads
+            if 'url' in component_info:
+                # Direct URL download
+                target_dir = self.models_dir / "texture_components" / component_name
+                
+                # Check if already downloaded
+                install_path = component_info.get('install_path', '')
+                if install_path:
+                    check_path = Path(install_path)
+                    if check_path.exists():
+                        return True, f"{component_name} already downloaded", ""
+                
+                # Use concurrent download with direct URL
+                return self.downloader.download_model_concurrent(
+                    repo_id="direct",
+                    model_name=component_name,
+                    model_type="texture_component",
+                    target_dir=target_dir,
+                    priority=priority,
+                    direct_url=component_info['url']
+                )
+                
+            elif 'repo_id' in component_info:
+                # HuggingFace model download
+                target_dir = self.models_dir / "texture_components" / component_name
+                
+                return self.downloader.download_model_concurrent(
+                    repo_id=component_info['repo_id'],
+                    model_name=component_name,
+                    model_type="texture_component",
+                    target_dir=target_dir,
+                    priority=priority
+                )
+            else:
+                return False, f"No download URL or repo_id for {component_name}", ""
+        
+        return False, f"Unknown component type: {component_type}", ""

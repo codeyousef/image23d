@@ -1,0 +1,1 @@
+# Tests for HunYuan3D App

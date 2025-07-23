@@ -4,7 +4,6 @@ from .memory import get_memory_manager, MemoryManager
 from .gpu import GPUOptimizer, get_gpu_optimizer
 from .performance import get_performance_monitor, profile_generation
 from .system import check_system_requirements, get_system_requirements_html, SystemRequirementsChecker
-from .gradio_fixes import apply_gradio_fix
 from .auth import get_hf_token_from_all_sources, validate_hf_token, save_hf_token, load_hf_token
 
 __all__ = [
@@ -24,9 +23,6 @@ __all__ = [
     "check_system_requirements",
     "get_system_requirements_html",
     "SystemRequirementsChecker",
-    
-    # Gradio fixes
-    "apply_gradio_fix",
     
     # Authentication
     "get_hf_token_from_all_sources",

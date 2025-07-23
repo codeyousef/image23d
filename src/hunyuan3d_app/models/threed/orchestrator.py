@@ -87,19 +87,24 @@ MODEL_PROFILES = {
             ModelCapability.SPARSE_RECONSTRUCTION,
             ModelCapability.TEXTURE_SYNTHESIS,
             ModelCapability.FAST_GENERATION,
-            ModelCapability.GGUF_SUPPORT
+            ModelCapability.GGUF_SUPPORT,
+            # Note: Mini model has basic PBR support at lower quality
+            # According to guide, it's for "rapid prototyping"
+            ModelCapability.PBR_MATERIALS  # Added based on guide's multi-variant support
         ],
         memory_requirements={
-            "draft": 3.0,
-            "standard": 4.0,
-            "high": 6.0,
-            "ultra": 8.0
+            # According to guide: Mini variant for rapid prototyping (4× faster)
+            "draft": 2.0,    # Reduced for true rapid prototyping
+            "standard": 3.0,  # Reduced from 4.0
+            "high": 4.0,     # Reduced from 6.0
+            "ultra": 6.0     # Reduced from 8.0
         },
         performance_metrics={
-            "draft": 15.0,
-            "standard": 30.0,
-            "high": 60.0,
-            "ultra": 90.0
+            # 4× faster according to guide
+            "draft": 7.5,    # 30/4 = 7.5 seconds
+            "standard": 15.0, # 60/4 = 15 seconds  
+            "high": 30.0,    # 120/4 = 30 seconds
+            "ultra": 60.0    # 240/4 = 60 seconds
         },
         supported_formats=["glb", "obj", "ply"],
         max_resolution=512,
@@ -169,7 +174,8 @@ class TaskRequirements:
         output_format: str = "glb",
         required_capabilities: Optional[List[ModelCapability]] = None,
         max_generation_time: Optional[float] = None,
-        max_memory_gb: Optional[float] = None
+        max_memory_gb: Optional[float] = None,
+        preferred_model: Optional[str] = None  # Preferred model to use
     ):
         self.input_type = input_type
         self.quality_preset = quality_preset
@@ -177,6 +183,7 @@ class TaskRequirements:
         self.required_capabilities = required_capabilities or []
         self.max_generation_time = max_generation_time
         self.max_memory_gb = max_memory_gb
+        self.preferred_model = preferred_model
         
         # Add implicit capabilities
         if input_type == "image":
@@ -201,11 +208,26 @@ class ModelSelector:
         """Select best model for task"""
         
         logger.info(f"Selecting model for requirements: capabilities={[c.value for c in requirements.required_capabilities]}, "
-                   f"quality={requirements.quality_preset}, format={requirements.output_format}")
+                   f"quality={requirements.quality_preset}, format={requirements.output_format}, "
+                   f"preferred={requirements.preferred_model}")
         logger.info(f"Available models: {[m.value for m in available_models]}")
         
         candidates = []
         reasons = []
+        
+        # If preferred model is specified, check it first
+        if requirements.preferred_model:
+            preferred_type = None
+            for model_type in available_models:
+                if model_type.value == requirements.preferred_model:
+                    preferred_type = model_type
+                    break
+                    
+            if preferred_type:
+                # Move preferred model to front of list
+                available_models = [preferred_type] + [m for m in available_models if m != preferred_type]
+            else:
+                logger.warning(f"Preferred model {requirements.preferred_model} not available")
         
         for model_type in available_models:
             profile = MODEL_PROFILES.get(model_type)
@@ -234,11 +256,28 @@ class ModelSelector:
             if memory_needed > available_memory:
                 # Check if can use quantization
                 if profile.supports_quantization:
-                    # Reduce memory requirement by 50% for Q8_0
-                    memory_needed *= 0.5
-                    if memory_needed > available_memory:
+                    # Try different quantization levels
+                    quantization_factors = {
+                        "Q8_0": 0.5,    # 50% of FP16
+                        "Q6_K": 0.375,  # 37.5% of FP16
+                        "Q5_K_S": 0.325, # 32.5% of FP16
+                        "Q4_K_M": 0.25   # 25% of FP16
+                    }
+                    
+                    # Find best quantization level for available memory
+                    can_fit = False
+                    for q_level, factor in quantization_factors.items():
+                        adjusted_memory = memory_needed * factor
+                        if adjusted_memory <= available_memory:
+                            can_fit = True
+                            memory_needed = adjusted_memory
+                            break
+                    
+                    if not can_fit:
+                        reasons.append(f"{model_type.value}: Insufficient memory even with Q4_K_M quantization")
                         continue
                 else:
+                    reasons.append(f"{model_type.value}: Needs {memory_needed:.1f}GB, only {available_memory:.1f}GB available")
                     continue
                     
             # Check performance
@@ -362,6 +401,22 @@ class ThreeDOrchestrator:
     ) -> Dict[str, Any]:
         """Generate 3D model based on requirements"""
         
+        # Validate input
+        if input_data is None:
+            raise ValueError("Input data cannot be None")
+            
+        # Check if image is valid
+        if isinstance(input_data, Image.Image):
+            if input_data.mode is None:
+                raise ValueError("Invalid Image object: mode is None")
+            logger.info(f"Input image: size={input_data.size}, mode={input_data.mode}")
+        elif isinstance(input_data, str):
+            if not input_data.strip():
+                raise ValueError("Text input cannot be empty")
+            logger.info(f"Input text: {input_data[:50]}...")
+        else:
+            raise ValueError(f"Invalid input type: {type(input_data)}")
+        
         # Default requirements
         if requirements is None:
             requirements = TaskRequirements(
@@ -415,22 +470,44 @@ class ThreeDOrchestrator:
         use_quantization = None
         if memory_needed > available_memory and profile.supports_quantization:
             # Select quantization level based on available memory
-            if available_memory > memory_needed * 0.5:
-                use_quantization = "Q8_0"
-            elif available_memory > memory_needed * 0.4:
-                use_quantization = "Q6_K"
-            elif available_memory > memory_needed * 0.35:
-                use_quantization = "Q5_K_S"
-            else:
-                use_quantization = "Q4_K_M"
-                
-            logger.info(f"Using {use_quantization} quantization for memory efficiency")
+            quantization_options = [
+                ("Q8_0", 0.5),
+                ("Q6_K", 0.375),
+                ("Q5_K_S", 0.325),
+                ("Q4_K_M", 0.25)
+            ]
             
-            # Reload model with quantization if needed
-            if hasattr(model, 'config') and model.config.gguf_quantization != use_quantization:
+            for q_level, factor in quantization_options:
+                if available_memory >= memory_needed * factor:
+                    use_quantization = q_level
+                    break
+            
+            if use_quantization is None:
+                # Even Q4_K_M doesn't fit, use it anyway and hope for the best
+                use_quantization = "Q4_K_M"
+                logger.warning(f"Memory very low ({available_memory:.1f}GB), using Q4_K_M quantization anyway")
+            else:
+                logger.info(f"Using {use_quantization} quantization for memory efficiency")
+            
+            # Apply quantization settings before generation
+            if hasattr(model, 'config'):
                 model.config.gguf_quantization = use_quantization
                 model.config.use_gguf = True
-                # Model will load quantized version on next use
+                
+                # If model has pipeline, update its config too
+                if hasattr(model, 'pipeline') and hasattr(model.pipeline, 'config'):
+                    model.pipeline.config.gguf_quantization = use_quantization
+                    model.pipeline.config.use_gguf = True
+                    
+                # Recalculate memory with quantization
+                memory_needed = memory_needed * {
+                    "Q8_0": 0.5,
+                    "Q6_K": 0.375,
+                    "Q5_K_S": 0.325,
+                    "Q4_K_M": 0.25
+                }.get(use_quantization, 1.0)
+                
+                logger.info(f"Adjusted memory requirement with {use_quantization}: {memory_needed:.1f}GB")
                 
         # Generate with selected model
         try:
@@ -455,8 +532,32 @@ class ThreeDOrchestrator:
             # Try fallback model if available
             if selected_model == ModelType3D.HUNYUAN3D_21:
                 logger.info("Trying fallback to mini model...")
-                requirements.max_memory_gb = 6.0  # Force mini model
-                return self.generate(input_data, requirements, progress_callback)
+                
+                # Adjust requirements for mini model capabilities
+                # According to the guide, mini model has limited capabilities
+                adjusted_requirements = TaskRequirements(
+                    input_type=requirements.input_type,
+                    quality_preset=requirements.quality_preset,
+                    output_format=requirements.output_format,
+                    required_capabilities=[cap for cap in requirements.required_capabilities 
+                                         if cap != ModelCapability.PBR_MATERIALS],  # Remove PBR for mini
+                    max_generation_time=requirements.max_generation_time,
+                    max_memory_gb=6.0,  # Force mini model memory limit
+                    preferred_model=requirements.preferred_model
+                )
+                
+                # If still requesting high quality, downgrade to standard for mini
+                if adjusted_requirements.quality_preset in ["high", "ultra"]:
+                    logger.info("Downgrading quality preset from %s to standard for mini model", 
+                               adjusted_requirements.quality_preset)
+                    adjusted_requirements.quality_preset = "standard"
+                    # Also remove high resolution capability
+                    adjusted_requirements.required_capabilities = [
+                        cap for cap in adjusted_requirements.required_capabilities 
+                        if cap != ModelCapability.HIGH_RESOLUTION
+                    ]
+                
+                return self.generate(input_data, adjusted_requirements, progress_callback)
             else:
                 raise
                 
@@ -486,6 +587,20 @@ class ThreeDOrchestrator:
         if not success:
             raise RuntimeError("Failed to load HunYuan3D model")
             
+        # Validate pipeline after loading
+        if hasattr(model, 'pipeline') and hasattr(model.pipeline, 'multiview_model'):
+            logger.info(f"Post-load validation:")
+            logger.info(f"  Model pipeline: {model.pipeline}")
+            logger.info(f"  Multiview model: {model.pipeline.multiview_model}")
+            logger.info(f"  Multiview pipeline: {getattr(model.pipeline.multiview_model, 'pipeline', 'NO ATTR')}")
+            logger.info(f"  Multiview loaded: {getattr(model.pipeline.multiview_model, 'loaded', 'NO ATTR')}")
+            
+            # Extra validation
+            if model.pipeline.multiview_model and hasattr(model.pipeline.multiview_model, 'pipeline'):
+                if model.pipeline.multiview_model.pipeline is None:
+                    logger.error("WARNING: Multiview pipeline is None after loading!")
+                    raise RuntimeError("Multiview pipeline failed to load properly")
+        
         return model
         
     def _load_hunyuan3d_mini(self) -> HunYuan3DModel:

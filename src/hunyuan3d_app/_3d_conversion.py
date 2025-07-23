@@ -164,16 +164,39 @@ class ThreeDConverter:
             
             progress(0.3, "Generating 3D model...")
             
-            # Use new 3D generation system
-            result = generate_3d_model(
-                image=image,
-                model_type=model_name,
-                quality_preset=quality_preset,
-                output_format="glb",
-                enable_pbr=texture_resolution >= 1024,
-                enable_depth_refinement=True,
-                progress_callback=model_progress
-            )
+            # Check if we're dealing with an orchestrator
+            if hasattr(hunyuan3d_model, 'generate') and not isinstance(hunyuan3d_model, dict):
+                logger.info("Using orchestrator-based model")
+                # Call orchestrator's generate method directly
+                from ..models.threed.base import TaskRequirements
+                
+                requirements = TaskRequirements(
+                    input_type="image",
+                    quality_preset=quality_preset,
+                    output_format="glb",
+                    required_capabilities=["image_to_3d", "pbr_materials"] if texture_resolution >= 1024 else ["image_to_3d"]
+                )
+                
+                # If model_name specified, set it as preferred
+                if model_name != "auto":
+                    requirements.preferred_model = model_name.replace("-", "_").lower()
+                
+                result = hunyuan3d_model.generate(
+                    image,
+                    requirements,
+                    progress_callback=model_progress
+                )
+            else:
+                # Use new 3D generation system
+                result = generate_3d_model(
+                    image=image,
+                    model_type=model_name,
+                    quality_preset=quality_preset,
+                    output_format="glb",
+                    enable_pbr=texture_resolution >= 1024,
+                    enable_depth_refinement=True,
+                    progress_callback=model_progress
+                )
             
             progress(0.9, "Processing results...")
             
@@ -191,12 +214,13 @@ class ThreeDConverter:
             
             progress(1.0, "3D conversion complete!")
             
-            return mesh_path, preview_path
+            return mesh_path, preview_path, "3D model generated successfully"
             
         except ImportError as e:
             logger.error(f"Failed to import new 3D generation system: {e}")
             # Fall back to checking if we have old-style model
             if hasattr(hunyuan3d_model, 'generate_mesh'):
+                logger.info("Falling back to legacy model conversion")
                 return self._convert_with_legacy_model(
                     hunyuan3d_model, model_name, image, 
                     num_views, mesh_resolution, texture_resolution,
@@ -207,7 +231,20 @@ class ThreeDConverter:
             
         except Exception as e:
             logger.error(f"3D generation error: {e}")
-            raise
+            logger.error(f"Error type: {type(e).__name__}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            
+            # Try legacy fallback if available
+            if hasattr(hunyuan3d_model, 'generate_mesh'):
+                logger.info("Error in new generation system, falling back to legacy model")
+                return self._convert_with_legacy_model(
+                    hunyuan3d_model, model_name, image, 
+                    num_views, mesh_resolution, texture_resolution,
+                    timestamp, progress
+                )
+            else:
+                raise
     
     def _convert_with_legacy_model(
         self,
@@ -243,13 +280,44 @@ class ThreeDConverter:
             
             # Save the mesh data
             try:
-                mesh_data.export(str(mesh_path))
-                logger.info(f"Saved mesh to {mesh_path}")
+                logger.info(f"[LEGACY] Attempting to export mesh to {mesh_path}")
+                logger.info(f"[LEGACY] Mesh type: {type(mesh_data)}")
+                logger.info(f"[LEGACY] Mesh has export method: {hasattr(mesh_data, 'export')}")
+                
+                if hasattr(mesh_data, 'export'):
+                    mesh_data.export(str(mesh_path))
+                    logger.info(f"[LEGACY] Saved mesh to {mesh_path}")
+                    
+                    # Verify the file was created
+                    if mesh_path.exists():
+                        logger.info(f"[LEGACY] Verified: File exists at {mesh_path}, size: {mesh_path.stat().st_size} bytes")
+                    else:
+                        logger.error(f"[LEGACY] ERROR: File was not created at {mesh_path}")
+                        raise FileNotFoundError(f"Mesh file was not created at {mesh_path}")
+                else:
+                    logger.error(f"[LEGACY] Mesh data has no export method")
+                    raise AttributeError(f"Mesh object of type {type(mesh_data)} has no export method")
+                    
             except Exception as e:
-                logger.error(f"Failed to export mesh: {e}")
-                mesh_path = self.output_dir / f"hunyuan3d_{timestamp}.obj"
-                mesh_data.export(str(mesh_path))
-                logger.info(f"Saved mesh as OBJ to {mesh_path}")
+                logger.error(f"[LEGACY] Failed to export mesh as GLB: {e}")
+                logger.error(f"[LEGACY] Error type: {type(e).__name__}")
+                
+                # Try OBJ format as fallback
+                try:
+                    mesh_path = self.output_dir / f"hunyuan3d_{timestamp}.obj"
+                    logger.info(f"[LEGACY] Attempting OBJ export to {mesh_path}")
+                    mesh_data.export(str(mesh_path))
+                    logger.info(f"[LEGACY] Saved mesh as OBJ to {mesh_path}")
+                    
+                    if mesh_path.exists():
+                        logger.info(f"[LEGACY] Verified: OBJ file exists, size: {mesh_path.stat().st_size} bytes")
+                    else:
+                        logger.error(f"[LEGACY] ERROR: OBJ file was not created")
+                        raise FileNotFoundError(f"OBJ file was not created at {mesh_path}")
+                        
+                except Exception as obj_error:
+                    logger.error(f"[LEGACY] Failed to export as OBJ too: {obj_error}")
+                    raise RuntimeError(f"Failed to export mesh in any format. GLB error: {e}, OBJ error: {obj_error}")
             
             # Create preview
             preview = self._create_preview_image(mesh_data)
@@ -259,7 +327,7 @@ class ThreeDConverter:
             
             progress(1.0, "3D conversion complete!")
             
-            return mesh_path, str(preview_path)
+            return mesh_path, str(preview_path), "3D model generated with legacy model"
             
         except Exception as e:
             logger.error(f"Legacy model conversion error: {e}")

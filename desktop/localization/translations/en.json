@@ -1,0 +1,258 @@
+{
+  "_metadata": {
+    "name": "English",
+    "code": "en",
+    "direction": "ltr"
+  },
+  "app": {
+    "title": "NeuralForge Studio",
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "warning": "Warning",
+    "info": "Information"
+  },
+  "navigation": {
+    "create": "Create",
+    "library": "Library",
+    "lab": "Lab",
+    "models": "Models",
+    "settings": "Settings"
+  },
+  "create": {
+    "title": "Create",
+    "subtitle": "AI-Powered Generation",
+    "modes": {
+      "image": "Image",
+      "3d": "3D",
+      "video": "Video"
+    },
+    "prompt": {
+      "label": "Prompt",
+      "placeholder": "Describe what you want to create...",
+      "enhance": "Enhance"
+    },
+    "negative_prompt": {
+      "label": "Negative Prompt",
+      "placeholder": "What to avoid in the generation..."
+    },
+    "model": {
+      "label": "Model",
+      "loading": "Loading models..."
+    },
+    "quality": {
+      "label": "Quality",
+      "draft": "Draft",
+      "standard": "Standard",
+      "high": "High",
+      "ultra": "Ultra"
+    },
+    "generate": "Generate",
+    "generating": "Generating...",
+    "cancel": "Cancel",
+    "upload": {
+      "label": "Upload Image",
+      "placeholder": "Drop image here or click to browse"
+    },
+    "advanced": {
+      "title": "Advanced Settings",
+      "steps": "Steps",
+      "guidance": "Guidance Scale",
+      "seed": "Seed",
+      "random_seed": "Random",
+      "scheduler": "Scheduler",
+      "size": "Size",
+      "width": "Width",
+      "height": "Height",
+      "batch_size": "Batch Size",
+      "batch_count": "Batch Count"
+    },
+    "3d": {
+      "export_formats": "Export Formats",
+      "game_engine": "Game Engine Preset",
+      "texture_size": "Texture Size",
+      "optimize_mesh": "Optimize Mesh",
+      "auto_uv": "Auto UV Unwrap",
+      "pbr_materials": "PBR Materials"
+    }
+  },
+  "library": {
+    "title": "Library",
+    "subtitle": "Your Creations",
+    "search": "Search...",
+    "filter": {
+      "all": "All",
+      "images": "Images",
+      "3d": "3D Models",
+      "videos": "Videos"
+    },
+    "sort": {
+      "date": "Date",
+      "name": "Name",
+      "size": "Size"
+    },
+    "no_items": "No items found",
+    "delete": "Delete",
+    "download": "Download",
+    "view_details": "View Details",
+    "confirm_delete": "Are you sure you want to delete this item?"
+  },
+  "models": {
+    "title": "Models",
+    "subtitle": "AI Model Management",
+    "tabs": {
+      "image": "Image Models",
+      "3d": "3D Models",
+      "video": "Video Models",
+      "enhanced": "Enhanced Models",
+      "pipeline": "Pipeline Components"
+    },
+    "download": "Download",
+    "downloading": "Downloading...",
+    "delete": "Delete",
+    "update": "Update",
+    "size": "Size",
+    "status": {
+      "available": "Available",
+      "not_downloaded": "Not Downloaded",
+      "downloading": "Downloading",
+      "error": "Error"
+    },
+    "info": {
+      "memory_required": "Memory Required",
+      "features": "Features",
+      "license": "License"
+    }
+  },
+  "lab": {
+    "title": "Lab",
+    "subtitle": "Experimental Features & Advanced Tools",
+    "batch": {
+      "title": "Batch Processing",
+      "description": "Process multiple prompts or images at once",
+      "configuration": "Batch Configuration",
+      "queue": "Processing Queue",
+      "mode": {
+        "text": "Text Prompts",
+        "csv": "CSV File",
+        "images": "Images"
+      },
+      "add_to_queue": "Add to Queue",
+      "process_batch": "Process Batch",
+      "stop": "Stop Processing",
+      "clear_queue": "Clear Queue",
+      "items_in_queue": "{count} items in queue",
+      "completed": "{completed} completed, {failed} failed",
+      "csv_format": "Format: prompt, negative_prompt, steps, guidance_scale"
+    },
+    "upscale": {
+      "title": "AI Upscaling",
+      "description": "Enhance image resolution using AI models",
+      "factor": "Upscale Factor",
+      "model": "Model",
+      "options": "Enhancement Options",
+      "denoise": "Denoise",
+      "sharpen": "Sharpen",
+      "face_enhance": "Face Enhancement",
+      "process": "Upscale Image"
+    },
+    "style_transfer": {
+      "title": "Style Transfer",
+      "description": "Apply artistic styles from one image to another",
+      "content": "Content Image",
+      "style": "Style Image",
+      "strength": "Style Strength",
+      "preservation": "Content Preservation",
+      "apply": "Apply Style Transfer"
+    },
+    "animation": {
+      "title": "Animation Tools",
+      "coming_soon": "Coming soon: Image-to-video and interpolation tools"
+    },
+    "analysis": {
+      "title": "Model Analysis",
+      "description": "Analyze and compare AI models",
+      "select_models": "Select Models to Analyze",
+      "settings": "Benchmark Settings",
+      "samples": "Test Samples",
+      "resolution": "Resolution",
+      "metrics": "Metrics to Measure",
+      "speed": "Generation Speed",
+      "memory": "Memory Usage",
+      "quality": "Quality Score",
+      "run": "Run Analysis"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "subtitle": "Application Preferences",
+    "tabs": {
+      "general": "General",
+      "appearance": "Appearance",
+      "performance": "Performance",
+      "advanced": "Advanced"
+    },
+    "general": {
+      "language": "Language",
+      "auto_save": "Auto-save generations",
+      "output_directory": "Output Directory",
+      "browse": "Browse",
+      "enable_analytics": "Enable analytics",
+      "check_updates": "Check for updates"
+    },
+    "appearance": {
+      "theme": "Theme",
+      "theme_light": "Light",
+      "theme_dark": "Dark",
+      "theme_auto": "Auto",
+      "accent_color": "Accent Color",
+      "font_size": "Font Size",
+      "show_tooltips": "Show tooltips",
+      "animations": "Enable animations"
+    },
+    "performance": {
+      "gpu": "GPU Settings",
+      "device": "Device",
+      "memory_limit": "Memory Limit",
+      "precision": "Precision",
+      "optimization": "Optimization",
+      "enable_xformers": "Enable xFormers",
+      "enable_compile": "Enable torch.compile",
+      "attention_slicing": "Attention Slicing",
+      "cpu_offload": "CPU Offload"
+    },
+    "advanced": {
+      "api": "API Settings",
+      "enable_api": "Enable API Server",
+      "api_port": "API Port",
+      "api_key": "API Key",
+      "regenerate_key": "Regenerate Key",
+      "debug": "Debug Settings",
+      "debug_mode": "Debug Mode",
+      "log_level": "Log Level",
+      "export_logs": "Export Logs"
+    },
+    "save": "Save Settings",
+    "reset": "Reset to Defaults",
+    "saved": "Settings saved successfully"
+  },
+  "common": {
+    "ok": "OK",
+    "cancel": "Cancel",
+    "yes": "Yes",
+    "no": "No",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit",
+    "close": "Close",
+    "back": "Back",
+    "next": "Next",
+    "finish": "Finish",
+    "loading": "Loading...",
+    "processing": "Processing...",
+    "please_wait": "Please wait...",
+    "error_occurred": "An error occurred",
+    "try_again": "Try Again",
+    "copied": "Copied to clipboard"
+  }
+}

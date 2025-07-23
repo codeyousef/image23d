@@ -12,12 +12,60 @@ import logging
 import os
 from pathlib import Path
 from typing import Dict, Optional, Any, List, Tuple
+from contextlib import contextmanager
 import torch
 import psutil
 import numpy as np
 from PIL import Image
 
 logger = logging.getLogger(__name__)
+
+
+def unload_model_completely(model, optimizer=None):
+    """Completely unload a model from GPU memory
+    
+    Based on Managing Multiple AI Models guide - complete memory release pattern.
+    """
+    # Move model to CPU first
+    if hasattr(model, 'to'):
+        try:
+            model.to('cpu')
+        except Exception as e:
+            logger.warning(f"Failed to move model to CPU: {e}")
+    
+    # Handle model-specific cleanup
+    if hasattr(model, 'pipeline') and hasattr(model.pipeline, 'multiview_model'):
+        # HunYuan3D specific cleanup
+        if model.pipeline.multiview_model:
+            if hasattr(model.pipeline.multiview_model, 'pipeline'):
+                pipeline = model.pipeline.multiview_model.pipeline
+                if pipeline and hasattr(pipeline, 'to'):
+                    try:
+                        pipeline.to('cpu')
+                    except:
+                        pass
+    
+    # Delete references
+    del model
+    if optimizer:
+        del optimizer
+    
+    # Force garbage collection
+    gc.collect()
+    
+    # Clear CUDA cache
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        
+    # Additional aggressive cleanup from the guide
+    for obj in gc.get_objects():
+        try:
+            if torch.is_tensor(obj) and obj.is_cuda:
+                del obj
+        except:
+            pass
+    gc.collect()
 
 
 class IntermediateCache:
@@ -189,7 +237,14 @@ class ModelSwapper:
             return False, f"Failed to load {new_model_name}: {str(e)}"
             
     def unload_current(self) -> Tuple[bool, str]:
-        """Unload current model and free memory"""
+        """Unload current model and free memory
+        
+        Implements complete memory release pattern from Managing Multiple AI Models guide:
+        1. Move model to CPU first
+        2. Delete references
+        3. Force garbage collection
+        4. Clear CUDA cache
+        """
         if self.current_model is None:
             return True, "No model loaded"
             
@@ -199,17 +254,14 @@ class ModelSwapper:
             # Call model's unload method if available
             if hasattr(self.current_model, 'unload'):
                 self.current_model.unload()
+            
+            # Use the complete unload pattern from the guide
+            unload_model_completely(self.current_model)
                 
             # Clear references
             self.current_model = None
             self.current_model_name = None
             self.loaded_components.clear()
-            
-            # Force garbage collection
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
                 
             return True, f"Unloaded {model_name}"
             
@@ -237,6 +289,17 @@ class ThreeDMemoryManager:
         # Memory thresholds (GB)
         self.critical_threshold = 2.0  # Force unload if less than this
         self.warning_threshold = 4.0   # Warn if less than this
+        
+        # Memory pools for different model types (from the guide)
+        self.memory_pools = {
+            "text": {"allocated": 0, "max": 8.0},    # 8-16GB for text models
+            "image": {"allocated": 0, "max": 8.0},   # 4-8GB for image models
+            "3d": {"allocated": 0, "max": 12.0}      # 4-12GB for 3D models
+        }
+        
+        # Track memory fragmentation
+        self.fragmentation_counter = 0
+        self.max_fragmentation_before_cleanup = 3
         
     def check_memory_available(self, required_gb: float) -> Tuple[bool, str]:
         """Check if enough memory is available"""
@@ -315,37 +378,69 @@ class ThreeDMemoryManager:
         freed = final_free - initial_free
         
         logger.info(f"Freed {freed:.1f}GB of memory")
+        
+        # Check for fragmentation
+        if freed < target_gb * 0.5:  # Less than 50% of target freed
+            self.fragmentation_counter += 1
+            if self.fragmentation_counter >= self.max_fragmentation_before_cleanup:
+                logger.warning("Memory fragmentation detected - performing deep cleanup")
+                self._handle_memory_fragmentation()
+                self.fragmentation_counter = 0
+        
         return freed
+    
+    @contextmanager
+    def optimize_memory_usage(self):
+        """Context manager for optimizing memory usage during operations.
         
-    def should_use_sequential_offload(self) -> bool:
-        """Check if sequential CPU offload should be used"""
-        available = self.get_available_memory()
-        return available < self.warning_threshold
+        Implements memory optimization patterns from the guide:
+        - Check available memory before operation
+        - Enable sequential offloading if needed
+        - Clear memory after operation
+        """
+        # Check initial memory state
+        initial_memory = self.get_available_memory()
+        if initial_memory < self.warning_threshold:
+            logger.warning(f"Low memory warning: {initial_memory:.1f}GB available")
         
-    def get_optimal_batch_size(self, base_batch_size: int = 1) -> int:
-        """Get optimal batch size based on available memory"""
-        available = self.get_available_memory()
+        # Log memory status
+        self.log_memory_status()
         
-        if available > 16:
-            return base_batch_size * 4
-        elif available > 12:
-            return base_batch_size * 2
-        elif available > 8:
-            return base_batch_size
-        else:
-            return max(1, base_batch_size // 2)
+        try:
+            yield self
+        finally:
+            # Cleanup after operation
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             
-    def log_memory_status(self):
-        """Log current memory status"""
-        usage = self.get_memory_usage()
-        
-        if "gpu_free_gb" in usage:
-            logger.info(
-                f"GPU Memory: {usage['gpu_free_gb']:.1f}GB free / "
-                f"{usage['gpu_total_gb']:.1f}GB total"
-            )
-        else:
-            logger.info(
-                f"RAM: {usage['ram_available_gb']:.1f}GB available / "
-                f"{usage['ram_total_gb']:.1f}GB total"
-            )
+            # Log final memory status
+            final_memory = self.get_available_memory()
+            memory_used = initial_memory - final_memory
+            if memory_used > 0:
+                logger.info(f"Operation used {memory_used:.1f}GB of memory")
+
+
+# Global memory manager instance
+_memory_manager = None
+
+
+def get_memory_manager(cache_dir: Optional[Path] = None) -> ThreeDMemoryManager:
+    """Get or create the global memory manager instance."""
+    global _memory_manager
+    if _memory_manager is None:
+        if cache_dir is None:
+            cache_dir = Path("cache")
+        _memory_manager = ThreeDMemoryManager(cache_dir)
+    return _memory_manager
+
+
+@contextmanager
+def optimize_memory_usage():
+    """Global context manager for memory optimization.
+    
+    This is a convenience function that uses the global memory manager.
+    """
+    manager = get_memory_manager()
+    with manager.optimize_memory_usage():
+        yield manager

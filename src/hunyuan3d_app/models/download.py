@@ -30,17 +30,23 @@ class ModelDownloader:
         self.websocket_server = websocket_server
         
         # Download state
+        self.max_concurrent_downloads = 3
+        self.download_semaphore = threading.Semaphore(self.max_concurrent_downloads)
+        
+        # Download tracking
+        self.active_downloads = {}  # {download_id: download_info}
+        self.download_threads = {}  # {download_id: thread}
+        self.download_queue = []  # Queue of pending downloads
+        self.file_sizes = {}
+        self.lock = threading.Lock()
+        
+        # Legacy compatibility
         self.download_in_progress = False
         self.current_download_model = None
         self.stop_download_flag = False
         self.download_thread = None
         self.download_progress = DownloadProgress()
         self.current_task_id = None
-        
-        # Download tracking
-        self.active_downloads = {}
-        self.file_sizes = {}
-        self.lock = threading.Lock()
     
     def set_token(self, token: str):
         """Set Hugging Face token."""
@@ -49,8 +55,30 @@ class ModelDownloader:
             os.environ["HF_TOKEN"] = token
     
     def is_downloading(self) -> bool:
-        """Check if a download is in progress."""
-        return self.download_in_progress
+        """Check if any download is in progress."""
+        with self.lock:
+            return len(self.active_downloads) > 0 or self.download_in_progress
+    
+    def get_active_downloads(self) -> Dict[str, Any]:
+        """Get information about all active downloads."""
+        with self.lock:
+            return self.active_downloads.copy()
+    
+    def get_download_queue(self) -> List[Dict[str, Any]]:
+        """Get the current download queue."""
+        with self.lock:
+            return self.download_queue.copy()
+    
+    def is_model_downloading(self, model_name: str) -> bool:
+        """Check if a specific model is currently downloading."""
+        with self.lock:
+            for download_info in self.active_downloads.values():
+                if download_info.get('model_name') == model_name:
+                    return True
+            for queued in self.download_queue:
+                if queued.get('model_name') == model_name:
+                    return True
+        return False
     
     def stop_download(self):
         """Stop current download."""
@@ -109,6 +137,177 @@ class ModelDownloader:
         except Exception as e:
             logger.debug(f"Failed to emit WebSocket progress: {e}")
     
+    def download_model_concurrent(
+        self,
+        repo_id: str,
+        model_name: str,
+        model_type: str,
+        target_dir: Path,
+        progress_callback: Optional[Callable] = None,
+        specific_files: Optional[List[str]] = None,
+        priority: int = 0,
+        direct_url: Optional[str] = None
+    ) -> Tuple[bool, str, str]:
+        """Download a model with support for concurrent downloads.
+        
+        Args:
+            repo_id: HuggingFace repo ID or "direct" for direct URL downloads
+            model_name: Name of the model
+            model_type: Type of model
+            target_dir: Target directory
+            progress_callback: Progress callback
+            specific_files: Specific files to download
+            priority: Download priority
+            direct_url: Direct URL for non-HuggingFace downloads
+        
+        Returns:
+            Tuple of (success, message, download_id)
+        """
+        # Check if already downloading
+        if self.is_model_downloading(model_name):
+            return False, f"{model_name} is already downloading or queued", ""
+        
+        # Generate unique download ID
+        download_id = str(uuid.uuid4())
+        
+        # Create download info
+        download_info = {
+            'download_id': download_id,
+            'repo_id': repo_id,
+            'model_name': model_name,
+            'model_type': model_type,
+            'target_dir': target_dir,
+            'progress_callback': progress_callback,
+            'specific_files': specific_files,
+            'priority': priority,
+            'status': 'queued',
+            'progress': DownloadProgress(),
+            'start_time': time.time(),
+            'direct_url': direct_url
+        }
+        
+        with self.lock:
+            # Check if we can start immediately
+            if len(self.active_downloads) < self.max_concurrent_downloads:
+                # Start download immediately
+                self.active_downloads[download_id] = download_info
+                download_info['status'] = 'downloading'
+                
+                # Start download thread
+                thread = threading.Thread(
+                    target=self._concurrent_download_worker,
+                    args=(download_id,),
+                    name=f"Download-{model_name}"
+                )
+                self.download_threads[download_id] = thread
+                thread.start()
+                
+                return True, f"Started downloading {model_name}", download_id
+            else:
+                # Add to queue
+                self.download_queue.append(download_info)
+                # Sort queue by priority
+                self.download_queue.sort(key=lambda x: x['priority'], reverse=True)
+                
+                return True, f"{model_name} added to download queue (position {len(self.download_queue)})", download_id
+    
+    def _concurrent_download_worker(self, download_id: str):
+        """Worker thread for concurrent downloads."""
+        download_info = None
+        
+        try:
+            # Acquire semaphore
+            self.download_semaphore.acquire()
+            
+            with self.lock:
+                download_info = self.active_downloads.get(download_id)
+                if not download_info:
+                    logger.error(f"Download {download_id} not found in active downloads")
+                    return
+            
+            # Extract download parameters
+            repo_id = download_info['repo_id']
+            model_name = download_info['model_name']
+            model_type = download_info['model_type']
+            target_dir = download_info['target_dir']
+            progress_callback = download_info['progress_callback']
+            specific_files = download_info['specific_files']
+            direct_url = download_info.get('direct_url')
+            
+            logger.info(f"Starting concurrent download of {model_name} (ID: {download_id})")
+            
+            # Use the existing download logic
+            self._download_worker(
+                repo_id=repo_id,
+                model_name=model_name,
+                model_type=model_type,
+                target_dir=target_dir,
+                progress_callback=lambda p: self._update_concurrent_progress(download_id, p, progress_callback),
+                completion_callback=lambda s, m: self._handle_concurrent_completion(download_id, s, m),
+                specific_files=specific_files,
+                direct_url=direct_url
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in concurrent download worker: {e}")
+            self._handle_concurrent_completion(download_id, False, str(e))
+        finally:
+            # Release semaphore
+            self.download_semaphore.release()
+            
+            # Remove from active downloads
+            with self.lock:
+                if download_id in self.active_downloads:
+                    del self.active_downloads[download_id]
+                if download_id in self.download_threads:
+                    del self.download_threads[download_id]
+            
+            # Process queue
+            self._process_download_queue()
+    
+    def _update_concurrent_progress(self, download_id: str, progress: DownloadProgress, user_callback: Optional[Callable]):
+        """Update progress for a concurrent download."""
+        with self.lock:
+            if download_id in self.active_downloads:
+                self.active_downloads[download_id]['progress'] = progress
+        
+        # Call user callback if provided
+        if user_callback:
+            user_callback(progress)
+    
+    def _handle_concurrent_completion(self, download_id: str, success: bool, message: str):
+        """Handle completion of a concurrent download."""
+        with self.lock:
+            if download_id in self.active_downloads:
+                self.active_downloads[download_id]['status'] = 'completed' if success else 'failed'
+                self.active_downloads[download_id]['message'] = message
+        
+        logger.info(f"Download {download_id} completed: {success} - {message}")
+    
+    def _process_download_queue(self):
+        """Process the download queue when a slot becomes available."""
+        with self.lock:
+            # Check if we have capacity and queued downloads
+            if len(self.active_downloads) < self.max_concurrent_downloads and self.download_queue:
+                # Get next download from queue
+                download_info = self.download_queue.pop(0)
+                download_id = download_info['download_id']
+                
+                # Move to active downloads
+                self.active_downloads[download_id] = download_info
+                download_info['status'] = 'downloading'
+                
+                # Start download thread
+                thread = threading.Thread(
+                    target=self._concurrent_download_worker,
+                    args=(download_id,),
+                    name=f"Download-{download_info['model_name']}"
+                )
+                self.download_threads[download_id] = thread
+                thread.start()
+                
+                logger.info(f"Started queued download: {download_info['model_name']}")
+    
     def download_model(
         self,
         repo_id: str,
@@ -117,18 +316,20 @@ class ModelDownloader:
         target_dir: Path,
         progress_callback: Optional[Callable] = None,
         completion_callback: Optional[Callable] = None,
-        specific_files: Optional[List[str]] = None
+        specific_files: Optional[List[str]] = None,
+        direct_url: Optional[str] = None
     ) -> Tuple[bool, str]:
-        """Download a model from Hugging Face Hub.
+        """Download a model from Hugging Face Hub or direct URL.
         
         Args:
-            repo_id: Hugging Face repository ID
+            repo_id: Hugging Face repository ID or "direct" for direct URL
             model_name: Name of the model
             model_type: Type of model (image, 3d, etc.)
             target_dir: Directory to download to
             progress_callback: Optional callback for progress updates
             completion_callback: Optional callback when download completes
             specific_files: Optional list of specific files to download (for GGUF models)
+            direct_url: Direct URL for non-HuggingFace downloads
             
         Returns:
             Tuple of (success, message)
@@ -156,7 +357,7 @@ class ModelDownloader:
         # Start download in thread
         self.download_thread = threading.Thread(
             target=self._download_worker,
-            args=(repo_id, model_name, model_type, target_dir, progress_callback, internal_completion_callback, specific_files),
+            args=(repo_id, model_name, model_type, target_dir, progress_callback, internal_completion_callback, specific_files, direct_url),
             name=f"ModelDownload-{model_name}",
             daemon=True
         )
@@ -173,7 +374,8 @@ class ModelDownloader:
         target_dir: Path,
         progress_callback: Optional[Callable],
         completion_callback: Optional[Callable],
-        specific_files: Optional[List[str]] = None
+        specific_files: Optional[List[str]] = None,
+        direct_url: Optional[str] = None
     ):
         """Worker thread for downloading models."""
         logger.info(f"Download worker started for {model_name}")
@@ -212,7 +414,70 @@ class ModelDownloader:
             # Download the model
             logger.info(f"Starting download of {model_name} from {repo_id} to {target_dir}")
             
-            if specific_files:
+            # Handle direct URL downloads
+            if direct_url and repo_id == "direct":
+                logger.info(f"Using direct URL download: {direct_url}")
+                
+                # Extract filename from URL
+                import os
+                from urllib.parse import urlparse
+                parsed_url = urlparse(direct_url)
+                filename = os.path.basename(parsed_url.path)
+                if not filename:
+                    filename = f"{model_name}.model"
+                
+                # Initialize progress
+                self.download_progress.total_files = 1
+                self.download_progress.total_size = 0  # Will be updated from response headers
+                self.download_progress.start_time = time.time()
+                self.download_progress.current_file = filename
+                
+                # Download file
+                local_path = target_dir / filename
+                logger.info(f"Downloading {filename} to {local_path}")
+                
+                try:
+                    import requests
+                    
+                    # Get file size
+                    response = requests.head(direct_url, timeout=10)
+                    file_size = int(response.headers.get('content-length', 0))
+                    self.download_progress.total_size = file_size
+                    
+                    # Download with progress
+                    self._download_file_with_progress(
+                        repo_id="direct",
+                        filename=filename,
+                        target_dir=target_dir,
+                        file_size=file_size,
+                        progress_callback=progress_callback,
+                        direct_url=direct_url
+                    )
+                    
+                    # Mark as complete
+                    self.download_progress.completed_files = 1
+                    self.download_progress.percentage = 100
+                    self.download_progress.is_complete = True
+                    
+                    if progress_callback:
+                        progress_callback(self.download_progress)
+                    
+                    logger.info(f"Successfully downloaded {model_name}")
+                    
+                    if completion_callback:
+                        completion_callback(True, f"Successfully downloaded {model_name}")
+                    
+                    return
+                    
+                except Exception as e:
+                    error_msg = f"Failed to download from direct URL: {str(e)}"
+                    logger.error(error_msg)
+                    self.download_progress.error = error_msg
+                    if completion_callback:
+                        completion_callback(False, error_msg)
+                    return
+            
+            elif specific_files:
                 # Download only specific files (for GGUF models)
                 logger.info(f"Downloading specific files: {specific_files}")
                 
@@ -446,14 +711,18 @@ class ModelDownloader:
         filename: str,
         target_dir: Path,
         file_size: int,
-        progress_callback: Optional[Callable]
+        progress_callback: Optional[Callable],
+        direct_url: Optional[str] = None
     ):
         """Download a single file with detailed progress tracking."""
         import requests
         from huggingface_hub import hf_hub_url
         
         # Get the download URL
-        url = hf_hub_url(repo_id=repo_id, filename=filename)
+        if direct_url:
+            url = direct_url
+        else:
+            url = hf_hub_url(repo_id=repo_id, filename=filename)
         
         # Set up the local file path
         local_path = target_dir / filename

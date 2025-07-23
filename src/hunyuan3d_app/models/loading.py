@@ -473,27 +473,28 @@ class ModelLoader:
                         logger.info(f"Contents: {list(actual_model_path.iterdir())}")
                         raise FileNotFoundError(f"Could not find Hunyuan3D DIT model files in {actual_model_path}")
                 
-                # Use the new 3D generation system
-                from ..generation.threed import get_3d_generator
+                # Use the new 3D generation system through orchestrator
+                from ..models.threed.orchestrator import ThreeDModelOrchestrator
+                from ..models.threed.memory import ThreeDMemoryManager
                 
                 if progress_callback:
-                    progress_callback(0.4, "Loading Hunyuan3D model with full inference support...")
+                    progress_callback(0.4, "Initializing Hunyuan3D orchestrator...")
                 
-                # Return a simple model info dict for now
-                # The actual 3D generation will use the new system
-                model = {
-                    'name': model_name,
-                    'path': str(actual_model_path),
-                    'version': model_version,
-                    'type': '3d'
-                }
-                status = f"Hunyuan3D {model_version} ready (using new generation system)"
+                # Create memory manager and orchestrator
+                cache_dir = Path("cache/3d")
+                memory_manager = ThreeDMemoryManager(cache_dir)
+                orchestrator = ThreeDModelOrchestrator(memory_manager)
                 
-                if model:
-                    logger.info(f"Successfully loaded Hunyuan3D model {model_name}: {status}")
-                    return model, status
-                else:
-                    raise RuntimeError(f"Failed to load Hunyuan3D model: {status}")
+                if progress_callback:
+                    progress_callback(0.5, "Loading Hunyuan3D model components...")
+                
+                # The orchestrator will handle the actual model loading
+                # For now, return the orchestrator itself which has the generate method
+                model = orchestrator
+                status = f"Hunyuan3D {model_version} ready (orchestrator initialized)"
+                
+                logger.info(f"Successfully initialized Hunyuan3D orchestrator for {model_name}")
+                return model, status
                 
             except Exception as e:
                 logger.error(f"Failed to load actual Hunyuan3D model: {e}")

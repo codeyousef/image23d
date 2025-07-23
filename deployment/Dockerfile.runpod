@@ -1,0 +1,34 @@
+# RunPod serverless GPU container
+FROM runpod/pytorch:2.0.1-py3.10-cuda11.8.0-devel-ubuntu22.04
+
+# Set working directory
+WORKDIR /workspace
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    git \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements-runpod.txt .
+RUN pip install --no-cache-dir -r requirements-runpod.txt
+
+# Copy model handler
+COPY core/services/runpod_handler.py /workspace/handler.py
+
+# Copy model loading utilities
+COPY core/models /workspace/core/models
+COPY core/config.py /workspace/core/config.py
+
+# Pre-download models (optional - can be done at runtime)
+# RUN python -c "from diffusers import FluxPipeline; FluxPipeline.from_pretrained('black-forest-labs/FLUX.1-schnell', torch_dtype=torch.float16)"
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV MODEL_CACHE_DIR=/workspace/models
+
+# RunPod expects handler.py in the root
+CMD ["python", "-u", "handler.py"]

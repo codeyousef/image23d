@@ -145,3 +145,6 @@ build/
 docs/_build/
 docs/_static/
 docs/_templates/
+/Hunyuan3D/hy3dpaint/utils/image_super_utils_wrapper.py
+/Hunyuan3D/hy3dpaint/DifferentiableRenderer/mesh_utils_nobpy.py
+/Hunyuan3D/setup.py

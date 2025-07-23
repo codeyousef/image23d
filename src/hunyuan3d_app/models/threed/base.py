@@ -8,6 +8,7 @@ Following the architecture from the 3D Implementation Guide:
 """
 
 import logging
+import gc
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -162,10 +163,38 @@ class Base3DModel(ABC):
         """Load the model weights"""
         pass
         
-    @abstractmethod
     def unload(self):
-        """Unload model to free memory"""
-        pass
+        """Unload model to free memory
+        
+        Base implementation following the Managing Multiple AI Models guide
+        """
+        # Move to CPU if possible
+        if hasattr(self, 'model') and self.model is not None:
+            if hasattr(self.model, 'to'):
+                try:
+                    self.model.to('cpu')
+                except Exception as e:
+                    logger.warning(f"Failed to move model to CPU: {e}")
+        
+        # Clear any pipeline references
+        if hasattr(self, 'pipeline') and self.pipeline is not None:
+            if hasattr(self.pipeline, 'to'):
+                try:
+                    self.pipeline.to('cpu')
+                except:
+                    pass
+            # Don't set to None yet - subclasses may need to do more cleanup
+            
+        # Clear loaded flag
+        self.loaded = False
+        
+        # Force garbage collection
+        gc.collect()
+        
+        # Clear CUDA cache if available
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
         
     @abstractmethod
     def get_memory_usage(self) -> Dict[str, float]:

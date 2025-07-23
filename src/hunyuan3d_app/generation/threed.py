@@ -110,7 +110,9 @@ class ThreeDGenerator:
                     ]
                     
                     if available_models:
-                        self.orchestrator.available_models = available_models
+                        # Create a new requirements object with preferred model
+                        # Don't modify orchestrator's available models list!
+                        requirements.preferred_model = internal_model
                     else:
                         logger.warning(f"Model {model_type} not available, using auto selection")
                         

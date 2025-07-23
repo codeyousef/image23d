@@ -1,0 +1,15 @@
+# RunPod serverless requirements
+runpod==1.6.0
+torch==2.0.1
+torchvision==0.15.2
+transformers==4.36.0
+diffusers==0.24.0
+accelerate==0.25.0
+safetensors==0.4.1
+omegaconf==2.3.0
+einops==0.7.0
+Pillow==10.1.0
+numpy==1.24.3
+scipy==1.10.1
+trimesh==4.0.8
+huggingface-hub==0.19.4

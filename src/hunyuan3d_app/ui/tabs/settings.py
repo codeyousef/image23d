@@ -114,6 +114,25 @@ def create_model_management_subtab(app: Any) -> None:
             logger.error(f"Error loading models: {e}")
             return []
     
+    # Check if texture components are installed
+    from pathlib import Path
+    realesrgan_installed = (Path("Hunyuan3D") / "hy3dpaint" / "ckpt" / "RealESRGAN_x4plus.pth").exists()
+    try:
+        import xatlas
+        xatlas_installed = True
+    except ImportError:
+        xatlas_installed = False
+    
+    # Show warning if texture components are missing
+    if not realesrgan_installed or not xatlas_installed:
+        gr.Markdown("""
+        <div style="background: #fef3c7; border: 2px solid #f59e0b; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+            <h4 style="margin-top: 0; color: #92400e;">⚠️ Texture Components Missing!</h4>
+            <p style="margin-bottom: 8px; color: #92400e;">Essential texture pipeline components are not installed. Your 3D models will generate without textures.</p>
+            <p style="margin-bottom: 0; color: #92400e;"><strong>Quick Fix:</strong> Go to the <strong>"Texture Components"</strong> tab below to install them.</p>
+        </div>
+        """)
+    
     with gr.Tabs() as model_tabs:
         # Download new models
         with gr.Tab("Download Models") as download_tab:
@@ -489,7 +508,42 @@ def create_model_management_subtab(app: Any) -> None:
             with gr.Tabs():
                 # Image models
                 with gr.Tab("Image Models"):
+                    def load_image_models():
+                        """Load installed image models"""
+                        try:
+                            downloaded = app.model_manager.get_downloaded_models("image")
+                            models_data = []
+                            
+                            for model_name in downloaded:
+                                model_path = app.model_manager.models_dir / "image" / model_name
+                                if not model_path.exists():
+                                    # Check other locations
+                                    model_path = app.model_manager.models_dir / "gguf" / model_name
+                                
+                                # Get size
+                                size = 0
+                                if model_path.exists():
+                                    for file in model_path.rglob("*"):
+                                        if file.is_file():
+                                            size += file.stat().st_size
+                                    size_str = f"{size / (1024**3):.1f} GB" if size > 0 else "Unknown"
+                                else:
+                                    size_str = "Unknown"
+                                
+                                models_data.append([
+                                    model_name,
+                                    str(model_path),
+                                    size_str,
+                                    "Never"  # TODO: Track last used
+                                ])
+                            
+                            return models_data
+                        except Exception as e:
+                            logger.error(f"Error loading image models: {e}")
+                            return []
+                    
                     image_models_list = gr.DataFrame(
+                        value=load_image_models(),
                         headers=["Name", "Path", "Size", "Last Used"],
                         datatype=["str", "str", "str", "str"],
                     )
@@ -497,10 +551,47 @@ def create_model_management_subtab(app: Any) -> None:
                     with gr.Row():
                         refresh_image_btn = create_action_button("🔄 Refresh", size="sm")
                         delete_image_btn = create_action_button("🗑️ Delete Selected", variant="stop", size="sm")
+                    
+                    refresh_image_btn.click(
+                        load_image_models,
+                        outputs=[image_models_list]
+                    )
                 
                 # 3D models
                 with gr.Tab("3D Models"):
+                    def load_3d_models():
+                        """Load installed 3D models"""
+                        try:
+                            downloaded = app.model_manager.get_downloaded_models("3d")
+                            models_data = []
+                            
+                            for model_name in downloaded:
+                                model_path = app.model_manager.models_dir / "3d" / model_name
+                                
+                                # Get size
+                                size = 0
+                                if model_path.exists():
+                                    for file in model_path.rglob("*"):
+                                        if file.is_file():
+                                            size += file.stat().st_size
+                                    size_str = f"{size / (1024**3):.1f} GB" if size > 0 else "Unknown"
+                                else:
+                                    size_str = "Unknown"
+                                
+                                models_data.append([
+                                    model_name,
+                                    str(model_path),
+                                    size_str,
+                                    "Never"  # TODO: Track last used
+                                ])
+                            
+                            return models_data
+                        except Exception as e:
+                            logger.error(f"Error loading 3D models: {e}")
+                            return []
+                    
                     threed_models_list = gr.DataFrame(
+                        value=load_3d_models(),
                         headers=["Name", "Path", "Size", "Last Used"],
                         datatype=["str", "str", "str", "str"],
                     )
@@ -508,6 +599,11 @@ def create_model_management_subtab(app: Any) -> None:
                     with gr.Row():
                         refresh_3d_btn = create_action_button("🔄 Refresh", size="sm")
                         delete_3d_btn = create_action_button("🗑️ Delete Selected", variant="stop", size="sm")
+                    
+                    refresh_3d_btn.click(
+                        load_3d_models,
+                        outputs=[threed_models_list]
+                    )
                 
                 # LoRA models
                 with gr.Tab("LoRA Models"):
@@ -520,6 +616,10 @@ def create_model_management_subtab(app: Any) -> None:
                         refresh_lora_btn = create_action_button("🔄 Refresh", size="sm")
                         delete_lora_btn = create_action_button("🗑️ Delete Selected", variant="stop", size="sm")
         
+        # Texture Components
+        with gr.Tab("Texture Components"):
+            create_texture_components_tab(app)
+        
         # Model conversion tools
         with gr.Tab("Model Tools"):
             gr.Markdown("### Model Conversion & Optimization")
@@ -528,16 +628,57 @@ def create_model_management_subtab(app: Any) -> None:
             with gr.Group():
                 gr.Markdown("#### Convert to GGUF Format")
                 
-                source_model = gr.Dropdown(
-                    choices=[],
-                    label="Source Model"
+                # Get list of available models for conversion
+                def get_convertible_models():
+                    """Get list of downloaded models that can be converted to GGUF"""
+                    try:
+                        choices = []
+                        # Get downloaded image models
+                        image_models = app.model_manager.get_downloaded_models("image")
+                        for model in image_models:
+                            # Check if it's not already a GGUF model
+                            if not model.lower().endswith(('gguf', 'q4', 'q5', 'q6', 'q8')):
+                                choices.append(f"Image: {model}")
+                        
+                        # Get downloaded 3D models
+                        threed_models = app.model_manager.get_downloaded_models("3d")
+                        for model in threed_models:
+                            choices.append(f"3D: {model}")
+                        
+                        return choices if choices else ["No convertible models found"]
+                    except Exception as e:
+                        logger.error(f"Error getting convertible models: {e}")
+                        return ["Error loading models"]
+                
+                with gr.Row():
+                    source_model = gr.Dropdown(
+                        choices=get_convertible_models(),
+                        label="Source Model",
+                        info="Select a model to convert to GGUF format",
+                        scale=4
+                    )
+                    refresh_models_btn = create_action_button("🔄", size="sm")
+                
+                # Refresh the dropdown when clicked
+                refresh_models_btn.click(
+                    get_convertible_models,
+                    outputs=[source_model]
                 )
                 
                 quantization = gr.Radio(
                     choices=["Q4_K_S", "Q5_K_M", "Q6_K", "Q8_0"],
                     value="Q8_0",
-                    label="Quantization Level"
+                    label="Quantization Level",
+                    info="Higher = Better quality, larger size | Lower = Smaller size, slight quality loss"
                 )
+                
+                gr.Markdown("""
+                **Quantization Levels:**
+                - **Q8_0**: Best quality (98% of original), ~50% size reduction
+                - **Q6_K**: Great balance (96% quality), ~60% size reduction
+                - **Q5_K_M**: Good quality (95% quality), ~65% size reduction
+                - **Q4_K_S**: Memory efficient (90% quality), ~70% size reduction
+                """)
                 
                 convert_btn = create_action_button("🔄 Convert to GGUF", variant="primary")
                 conversion_status = gr.HTML()
@@ -918,3 +1059,246 @@ def create_preferences_subtab(app: Any) -> None:
         export_prefs_btn = create_action_button("📤 Export Settings", size="sm")
     
     prefs_status = gr.HTML()
+
+
+def create_texture_components_tab(app: Any) -> None:
+    """Create UI for texture pipeline components"""
+    from ...config import TEXTURE_PIPELINE_COMPONENTS
+    
+    gr.Markdown("### 🎨 Essential Texture Pipeline Components")
+    gr.Markdown("""
+    These components are **required** for generating textures on your 3D models. 
+    Without them, HunYuan3D will only generate untextured (gray) 3D models.
+    """)
+    
+    # Quick install all button
+    with gr.Row():
+        install_all_btn = create_action_button(
+            "🚀 Install All Texture Components",
+            variant="primary",
+            size="lg"
+        )
+        status_all = gr.HTML()
+    
+    def install_all_components(progress=gr.Progress()):
+        """Install all texture components"""
+        results = []
+        components = list(TEXTURE_PIPELINE_COMPONENTS.items())
+        total = len(components)
+        
+        progress(0, desc="Starting texture component installation...")
+        
+        # Install each component
+        for idx, (comp_name, comp_info) in enumerate(components):
+            progress((idx / total), desc=f"Installing {comp_info.get('name', comp_name)}...")
+            
+            success, message, _ = app.model_manager.download_texture_component(
+                component_name=comp_name,
+                component_info=comp_info,
+                priority=1
+            )
+            
+            status_icon = "✅" if success else "❌"
+            results.append(f"{status_icon} {comp_name}: {message}")
+            
+            # Update progress
+            progress((idx + 1) / total, desc=f"Completed {comp_info.get('name', comp_name)}")
+        
+        # Special handling for RealESRGAN
+        progress(0.9, desc="Moving RealESRGAN to HunYuan3D directory...")
+        source_path = app.model_manager.models_dir / "texture_components" / "realesrgan" / "RealESRGAN_x4plus.pth"
+        target_path = Path("Hunyuan3D") / "hy3dpaint" / "ckpt" / "RealESRGAN_x4plus.pth"
+        
+        if source_path.exists() and not target_path.exists():
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy2(source_path, target_path)
+            results.append("✅ RealESRGAN: Moved to HunYuan3D directory")
+        
+        progress(1.0, desc="Installation complete!")
+        
+        return "<div style='padding: 10px;'>" + "<br>".join(results) + "</div>"
+    
+    install_all_btn.click(
+        install_all_components,
+        outputs=[status_all]
+    )
+    
+    # Individual components
+    with gr.Row():
+        with gr.Column():
+            gr.Markdown("#### 🖼️ RealESRGAN (Texture Enhancement)")
+            gr.Markdown("**Required for:** High-quality texture generation")
+            gr.Markdown("**Size:** ~64 MB")
+            
+            # Check if installed
+            realesrgan_path = Path("Hunyuan3D") / "hy3dpaint" / "ckpt" / "RealESRGAN_x4plus.pth"
+            realesrgan_status_display = gr.HTML(
+                value=f"<div style='color: {'green' if realesrgan_path.exists() else 'red'};'>{'✅ Installed' if realesrgan_path.exists() else '❌ Not Installed'}</div>"
+            )
+                
+            with gr.Row():
+                install_realesrgan_btn = create_action_button("Install RealESRGAN", variant="primary")
+                realesrgan_status = gr.HTML()
+                
+            def install_realesrgan(progress=gr.Progress()):
+                progress(0, desc="Starting RealESRGAN download...")
+                
+                comp_info = TEXTURE_PIPELINE_COMPONENTS.get("realesrgan", {})
+                success, message, _ = app.model_manager.download_texture_component(
+                    component_name="realesrgan",
+                    component_info=comp_info,
+                    priority=1
+                )
+                
+                progress(0.5, desc="Download complete, moving to HunYuan3D directory...")
+                
+                # Move to correct location
+                if success:
+                    source = app.model_manager.models_dir / "texture_components" / "realesrgan" / "RealESRGAN_x4plus.pth"
+                    target = Path("Hunyuan3D") / "hy3dpaint" / "ckpt" / "RealESRGAN_x4plus.pth"
+                    if source.exists() and not target.exists():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        import shutil
+                        shutil.copy2(source, target)
+                        progress(1.0, desc="Installation complete!")
+                        result = f"<div style='color: green;'>✅ {message} and moved to HunYuan3D</div>"
+                    else:
+                        progress(1.0, desc="Installation complete!")
+                        result = f"<div style='color: green;'>✅ {message}</div>"
+                else:
+                    progress(1.0, desc="Installation failed")
+                    result = f"<div style='color: red;'>❌ {message}</div>"
+                
+                # Return both the result and updated status
+                return result, "<div style='color: green;'>✅ Installed</div>" if success else "<div style='color: red;'>❌ Not Installed</div>"
+            
+            install_realesrgan_btn.click(
+                install_realesrgan,
+                outputs=[realesrgan_status, realesrgan_status_display]
+            )
+            
+        with gr.Column():
+            gr.Markdown("#### 📐 xatlas (UV Mapping)")
+            gr.Markdown("**Required for:** Proper texture mapping on 3D models")
+            gr.Markdown("**Size:** ~2 MB")
+            
+            # Check if installed
+            try:
+                import xatlas
+                xatlas_installed = True
+            except ImportError:
+                xatlas_installed = False
+                
+            xatlas_status_display = gr.HTML(
+                value=f"<div style='color: {'green' if xatlas_installed else 'red'};'>{'✅ Installed' if xatlas_installed else '❌ Not Installed'}</div>"
+            )
+                
+            with gr.Row():
+                install_xatlas_btn = create_action_button("Install xatlas", variant="primary")
+                xatlas_status = gr.HTML()
+                
+            def install_xatlas(progress=gr.Progress()):
+                progress(0, desc="Installing xatlas package...")
+                
+                comp_info = TEXTURE_PIPELINE_COMPONENTS.get("xatlas", {})
+                success, message, _ = app.model_manager.download_texture_component(
+                    component_name="xatlas",
+                    component_info=comp_info,
+                    priority=1
+                )
+                
+                progress(1.0, desc="Installation complete!" if success else "Installation failed")
+                
+                result = f"<div style='color: {'green' if success else 'red'};'>{'✅' if success else '❌'} {message}</div>"
+                status = "<div style='color: green;'>✅ Installed</div>" if success else "<div style='color: red;'>❌ Not Installed</div>"
+                
+                return result, status
+            
+            install_xatlas_btn.click(
+                install_xatlas,
+                outputs=[xatlas_status, xatlas_status_display]
+            )
+    
+    # Optional components
+    gr.Markdown("### 🔧 Optional Components")
+    gr.Markdown("These components enhance texture quality but are not strictly required.")
+    
+    with gr.Row():
+        with gr.Column():
+            gr.Markdown("#### 🔍 DINOv2 (Feature Extraction)")
+            gr.Markdown("**Enhances:** Texture detail and consistency")
+            gr.Markdown("**Size:** ~4.5 GB")
+            
+            # Check if installed
+            dinov2_path = app.model_manager.models_dir / "texture_components" / "dinov2"
+            dinov2_installed = dinov2_path.exists() and any(dinov2_path.iterdir()) if dinov2_path.exists() else False
+            
+            dinov2_status_display = gr.HTML(
+                value=f"<div style='color: {'green' if dinov2_installed else 'red'};'>{'✅ Installed' if dinov2_installed else '❌ Not Installed'}</div>"
+            )
+            
+            with gr.Row():
+                install_dino_btn = create_action_button("Install DINOv2", variant="secondary", size="sm")
+                dino_status = gr.HTML()
+            
+            def install_dinov2(progress=gr.Progress()):
+                progress(0, desc="Starting DINOv2 download...")
+                
+                comp_info = TEXTURE_PIPELINE_COMPONENTS.get("dinov2", {})
+                success, message, _ = app.model_manager.download_texture_component(
+                    component_name="dinov2",
+                    component_info=comp_info,
+                    priority=1
+                )
+                
+                progress(1.0, desc="Installation complete!" if success else "Installation failed")
+                
+                result = f"<div style='color: {'green' if success else 'red'};'>{'✅' if success else '❌'} {message}</div>"
+                status = "<div style='color: green;'>✅ Installed</div>" if success else "<div style='color: red;'>❌ Not Installed</div>"
+                
+                return result, status
+            
+            install_dino_btn.click(
+                install_dinov2,
+                outputs=[dino_status, dinov2_status_display]
+            )
+            
+        with gr.Column():
+            gr.Markdown("#### 🎨 Background Remover")
+            gr.Markdown("**Enhances:** Clean 3D generation from images")
+            gr.Markdown("**Size:** ~176 MB")
+            
+            # Check if installed
+            rembg_path = app.model_manager.models_dir / "texture_components" / "background_remover"
+            rembg_installed = rembg_path.exists() and any(rembg_path.iterdir()) if rembg_path.exists() else False
+            
+            rembg_status_display = gr.HTML(
+                value=f"<div style='color: {'green' if rembg_installed else 'red'};'>{'✅ Installed' if rembg_installed else '❌ Not Installed'}</div>"
+            )
+            
+            with gr.Row():
+                install_rembg_btn = create_action_button("Install RemBG", variant="secondary", size="sm")
+                rembg_status = gr.HTML()
+            
+            def install_rembg(progress=gr.Progress()):
+                progress(0, desc="Starting RemBG download...")
+                
+                comp_info = TEXTURE_PIPELINE_COMPONENTS.get("background_remover", {})
+                success, message, _ = app.model_manager.download_texture_component(
+                    component_name="background_remover",
+                    component_info=comp_info,
+                    priority=1
+                )
+                
+                progress(1.0, desc="Installation complete!" if success else "Installation failed")
+                
+                result = f"<div style='color: {'green' if success else 'red'};'>{'✅' if success else '❌'} {message}</div>"
+                status = "<div style='color: green;'>✅ Installed</div>" if success else "<div style='color: red;'>❌ Not Installed</div>"
+                
+                return result, status
+            
+            install_rembg_btn.click(
+                install_rembg,
+                outputs=[rembg_status, rembg_status_display]
+            )

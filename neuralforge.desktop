@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=NeuralForge Studio
+Comment=AI Creative Suite for generating images, 3D models, and videos
+Exec=/usr/bin/env python3 /opt/neuralforge/neuralforge.py
+Icon=neuralforge
+Terminal=false
+Categories=Graphics;3DGraphics;Photography;
+Keywords=AI;3D;Image;Generation;Creative;
+StartupNotify=true
+StartupWMClass=NeuralForge

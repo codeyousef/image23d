@@ -1,0 +1,258 @@
+{
+  "_metadata": {
+    "name": "العربية",
+    "code": "ar",
+    "direction": "rtl"
+  },
+  "app": {
+    "title": "استوديو NeuralForge",
+    "loading": "جاري التحميل...",
+    "error": "خطأ",
+    "success": "نجح",
+    "warning": "تحذير",
+    "info": "معلومات"
+  },
+  "navigation": {
+    "create": "إنشاء",
+    "library": "المكتبة",
+    "lab": "المختبر",
+    "models": "النماذج",
+    "settings": "الإعدادات"
+  },
+  "create": {
+    "title": "إنشاء",
+    "subtitle": "التوليد بالذكاء الاصطناعي",
+    "modes": {
+      "image": "صورة",
+      "3d": "ثلاثي الأبعاد",
+      "video": "فيديو"
+    },
+    "prompt": {
+      "label": "الوصف",
+      "placeholder": "اكتب ما تريد إنشاءه...",
+      "enhance": "تحسين"
+    },
+    "negative_prompt": {
+      "label": "الوصف السلبي",
+      "placeholder": "ما يجب تجنبه في التوليد..."
+    },
+    "model": {
+      "label": "النموذج",
+      "loading": "جاري تحميل النماذج..."
+    },
+    "quality": {
+      "label": "الجودة",
+      "draft": "مسودة",
+      "standard": "قياسي",
+      "high": "عالي",
+      "ultra": "فائق"
+    },
+    "generate": "توليد",
+    "generating": "جاري التوليد...",
+    "cancel": "إلغاء",
+    "upload": {
+      "label": "رفع صورة",
+      "placeholder": "اسحب الصورة هنا أو انقر للاستعراض"
+    },
+    "advanced": {
+      "title": "الإعدادات المتقدمة",
+      "steps": "الخطوات",
+      "guidance": "مقياس التوجيه",
+      "seed": "البذرة",
+      "random_seed": "عشوائي",
+      "scheduler": "المجدول",
+      "size": "الحجم",
+      "width": "العرض",
+      "height": "الارتفاع",
+      "batch_size": "حجم الدفعة",
+      "batch_count": "عدد الدفعات"
+    },
+    "3d": {
+      "export_formats": "صيغ التصدير",
+      "game_engine": "إعداد محرك الألعاب",
+      "texture_size": "حجم النسيج",
+      "optimize_mesh": "تحسين الشبكة",
+      "auto_uv": "فرد UV تلقائي",
+      "pbr_materials": "مواد PBR"
+    }
+  },
+  "library": {
+    "title": "المكتبة",
+    "subtitle": "إبداعاتك",
+    "search": "بحث...",
+    "filter": {
+      "all": "الكل",
+      "images": "الصور",
+      "3d": "نماذج ثلاثية الأبعاد",
+      "videos": "الفيديوهات"
+    },
+    "sort": {
+      "date": "التاريخ",
+      "name": "الاسم",
+      "size": "الحجم"
+    },
+    "no_items": "لم يتم العثور على عناصر",
+    "delete": "حذف",
+    "download": "تحميل",
+    "view_details": "عرض التفاصيل",
+    "confirm_delete": "هل أنت متأكد من حذف هذا العنصر؟"
+  },
+  "models": {
+    "title": "النماذج",
+    "subtitle": "إدارة نماذج الذكاء الاصطناعي",
+    "tabs": {
+      "image": "نماذج الصور",
+      "3d": "نماذج ثلاثية الأبعاد",
+      "video": "نماذج الفيديو",
+      "enhanced": "النماذج المحسنة",
+      "pipeline": "مكونات خط الأنابيب"
+    },
+    "download": "تحميل",
+    "downloading": "جاري التحميل...",
+    "delete": "حذف",
+    "update": "تحديث",
+    "size": "الحجم",
+    "status": {
+      "available": "متاح",
+      "not_downloaded": "غير محمّل",
+      "downloading": "جاري التحميل",
+      "error": "خطأ"
+    },
+    "info": {
+      "memory_required": "الذاكرة المطلوبة",
+      "features": "المميزات",
+      "license": "الترخيص"
+    }
+  },
+  "lab": {
+    "title": "المختبر",
+    "subtitle": "المميزات التجريبية والأدوات المتقدمة",
+    "batch": {
+      "title": "المعالجة الدفعية",
+      "description": "معالجة عدة أوصاف أو صور دفعة واحدة",
+      "configuration": "إعداد الدفعة",
+      "queue": "قائمة المعالجة",
+      "mode": {
+        "text": "أوصاف نصية",
+        "csv": "ملف CSV",
+        "images": "صور"
+      },
+      "add_to_queue": "إضافة إلى القائمة",
+      "process_batch": "معالجة الدفعة",
+      "stop": "إيقاف المعالجة",
+      "clear_queue": "مسح القائمة",
+      "items_in_queue": "{count} عنصر في القائمة",
+      "completed": "{completed} مكتمل، {failed} فشل",
+      "csv_format": "الصيغة: prompt, negative_prompt, steps, guidance_scale"
+    },
+    "upscale": {
+      "title": "تكبير بالذكاء الاصطناعي",
+      "description": "تحسين دقة الصورة باستخدام نماذج الذكاء الاصطناعي",
+      "factor": "معامل التكبير",
+      "model": "النموذج",
+      "options": "خيارات التحسين",
+      "denoise": "إزالة التشويش",
+      "sharpen": "زيادة الحدة",
+      "face_enhance": "تحسين الوجوه",
+      "process": "تكبير الصورة"
+    },
+    "style_transfer": {
+      "title": "نقل الأسلوب",
+      "description": "تطبيق أساليب فنية من صورة إلى أخرى",
+      "content": "صورة المحتوى",
+      "style": "صورة الأسلوب",
+      "strength": "قوة الأسلوب",
+      "preservation": "الحفاظ على المحتوى",
+      "apply": "تطبيق نقل الأسلوب"
+    },
+    "animation": {
+      "title": "أدوات الرسوم المتحركة",
+      "coming_soon": "قريباً: أدوات تحويل الصور إلى فيديو والاستيفاء"
+    },
+    "analysis": {
+      "title": "تحليل النماذج",
+      "description": "تحليل ومقارنة نماذج الذكاء الاصطناعي",
+      "select_models": "اختر النماذج للتحليل",
+      "settings": "إعدادات الاختبار",
+      "samples": "عينات الاختبار",
+      "resolution": "الدقة",
+      "metrics": "المقاييس للقياس",
+      "speed": "سرعة التوليد",
+      "memory": "استخدام الذاكرة",
+      "quality": "نقاط الجودة",
+      "run": "تشغيل التحليل"
+    }
+  },
+  "settings": {
+    "title": "الإعدادات",
+    "subtitle": "تفضيلات التطبيق",
+    "tabs": {
+      "general": "عام",
+      "appearance": "المظهر",
+      "performance": "الأداء",
+      "advanced": "متقدم"
+    },
+    "general": {
+      "language": "اللغة",
+      "auto_save": "حفظ تلقائي للإنشاءات",
+      "output_directory": "مجلد الإخراج",
+      "browse": "استعراض",
+      "enable_analytics": "تفعيل التحليلات",
+      "check_updates": "التحقق من التحديثات"
+    },
+    "appearance": {
+      "theme": "السمة",
+      "theme_light": "فاتح",
+      "theme_dark": "داكن",
+      "theme_auto": "تلقائي",
+      "accent_color": "لون التمييز",
+      "font_size": "حجم الخط",
+      "show_tooltips": "إظهار التلميحات",
+      "animations": "تفعيل الحركات"
+    },
+    "performance": {
+      "gpu": "إعدادات وحدة معالجة الرسوميات",
+      "device": "الجهاز",
+      "memory_limit": "حد الذاكرة",
+      "precision": "الدقة",
+      "optimization": "التحسين",
+      "enable_xformers": "تفعيل xFormers",
+      "enable_compile": "تفعيل torch.compile",
+      "attention_slicing": "تقسيم الانتباه",
+      "cpu_offload": "تفريغ المعالج"
+    },
+    "advanced": {
+      "api": "إعدادات API",
+      "enable_api": "تفعيل خادم API",
+      "api_port": "منفذ API",
+      "api_key": "مفتاح API",
+      "regenerate_key": "إعادة توليد المفتاح",
+      "debug": "إعدادات التصحيح",
+      "debug_mode": "وضع التصحيح",
+      "log_level": "مستوى السجل",
+      "export_logs": "تصدير السجلات"
+    },
+    "save": "حفظ الإعدادات",
+    "reset": "إعادة تعيين إلى الافتراضي",
+    "saved": "تم حفظ الإعدادات بنجاح"
+  },
+  "common": {
+    "ok": "موافق",
+    "cancel": "إلغاء",
+    "yes": "نعم",
+    "no": "لا",
+    "save": "حفظ",
+    "delete": "حذف",
+    "edit": "تعديل",
+    "close": "إغلاق",
+    "back": "رجوع",
+    "next": "التالي",
+    "finish": "إنهاء",
+    "loading": "جاري التحميل...",
+    "processing": "جاري المعالجة...",
+    "please_wait": "يرجى الانتظار...",
+    "error_occurred": "حدث خطأ",
+    "try_again": "حاول مرة أخرى",
+    "copied": "تم النسخ إلى الحافظة"
+  }
+}
