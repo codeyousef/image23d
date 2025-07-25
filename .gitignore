@@ -148,3 +148,10 @@ docs/_templates/
 /Hunyuan3D/hy3dpaint/utils/image_super_utils_wrapper.py
 /Hunyuan3D/hy3dpaint/DifferentiableRenderer/mesh_utils_nobpy.py
 /Hunyuan3D/setup.py
+/desktop/cache/
+/desktop/outputs/
+/desktop/image_models/
+/image_models/
+/models/
+/test_models/
+/test_outputs/

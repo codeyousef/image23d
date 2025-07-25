@@ -46,7 +46,8 @@ class ThreeDConverter:
             from datetime import datetime
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             input_path = self.cache_dir / f"input_{timestamp}.png"
-            image.save(input_path)
+            # Optimize PNG saving with compression level
+            image.save(input_path, "PNG", compress_level=6, optimize=True)
 
             logger.info(f"\n{'='*80}")
             logger.info(f"[3D_CONVERSION] Starting 3D conversion")
@@ -179,7 +180,7 @@ class ThreeDConverter:
                 
                 # If model_name specified, set it as preferred
                 if model_name != "auto":
-                    requirements.preferred_model = model_name.replace("-", "_").lower()
+                    requirements.preferred_model = model_name
                 
                 result = hunyuan3d_model.generate(
                     image,
@@ -208,7 +209,7 @@ class ThreeDConverter:
             preview_path = None
             if preview_image:
                 preview_path = self.output_dir / f"preview_{timestamp}.png"
-                preview_image.save(preview_path)
+                preview_image.save(preview_path, "PNG", compress_level=6, optimize=True)
                 logger.info(f"Saved preview to {preview_path}")
                 preview_path = str(preview_path)
             
@@ -322,7 +323,7 @@ class ThreeDConverter:
             # Create preview
             preview = self._create_preview_image(mesh_data)
             if preview:
-                preview.save(preview_path)
+                preview.save(preview_path, "PNG", compress_level=6, optimize=True)
                 logger.info(f"Saved preview to {preview_path}")
             
             progress(1.0, "3D conversion complete!")
@@ -407,33 +408,55 @@ class ThreeDConverter:
         """Create a wireframe-style preview when 3D rendering isn't available"""
         try:
             from PIL import ImageDraw
+            import numpy as np
             
             # Create image
             img = Image.new('RGB', (512, 512), color='white')
             draw = ImageDraw.Draw(img)
             
-            # Get mesh bounds and center
-            bounds = mesh.bounds
-            center = mesh.centroid[:2]  # X, Y only
-            scale = min(400 / (bounds[1][0] - bounds[0][0]), 400 / (bounds[1][1] - bounds[0][1]))
+            # Check if mesh has vertices
+            if len(mesh.vertices) == 0:
+                draw.text((20, 20), "Empty mesh", fill='black')
+                return img
             
-            # Draw wireframe representation
-            vertices_2d = []
-            for vertex in mesh.vertices:
-                x = int(256 + (vertex[0] - center[0]) * scale)
-                y = int(256 + (vertex[1] - center[1]) * scale)
-                vertices_2d.append((x, y))
+            # Vectorized vertex transformation
+            vertices = mesh.vertices
+            bounds = vertices.max(axis=0) - vertices.min(axis=0)
+            center = vertices.mean(axis=0)
             
-            # Draw edges (sample)
-            for i, face in enumerate(mesh.faces[:min(100, len(mesh.faces))]):  # Limit for performance
-                v1, v2, v3 = face
-                if v1 < len(vertices_2d) and v2 < len(vertices_2d) and v3 < len(vertices_2d):
-                    # Draw triangle edges
-                    draw.line([vertices_2d[v1], vertices_2d[v2]], fill='blue', width=1)
-                    draw.line([vertices_2d[v2], vertices_2d[v3]], fill='blue', width=1)
-                    draw.line([vertices_2d[v3], vertices_2d[v1]], fill='blue', width=1)
+            # Prevent division by zero and calculate scale
+            scale = 1
+            if bounds[0] > 0 and bounds[1] > 0:
+                scale = min(400 / bounds[0], 400 / bounds[1])
             
-            # Add title
+            # Transform all vertices at once using NumPy (vectorized operation)
+            vertices_2d = (vertices[:, :2] - center[:2]) * scale + 256
+            vertices_2d = vertices_2d.astype(int)
+            
+            # Use edge deduplication to avoid drawing the same edge multiple times
+            edges = set()
+            faces_to_render = mesh.faces[:min(100, len(mesh.faces))]  # Limit for performance
+            
+            for face in faces_to_render:
+                # Create edges from face, ensuring each edge is unique
+                for i in range(3):
+                    v1, v2 = face[i], face[(i+1)%3]
+                    if v1 < len(vertices_2d) and v2 < len(vertices_2d):
+                        # Sort vertices to ensure edge (1,2) and (2,1) are treated as the same
+                        edge = tuple(sorted([v1, v2]))
+                        edges.add(edge)
+            
+            # Draw unique edges only
+            for v1, v2 in edges:
+                try:
+                    draw.line([
+                        tuple(vertices_2d[v1]), 
+                        tuple(vertices_2d[v2])
+                    ], fill='blue', width=1)
+                except:
+                    continue  # Skip any problematic edges
+            
+            # Add mesh info
             draw.text((20, 20), "3D Mesh Preview (Wireframe)", fill='black')
             draw.text((20, 40), f"Vertices: {len(mesh.vertices):,}", fill='black')
             draw.text((20, 60), f"Faces: {len(mesh.faces):,}", fill='black')

@@ -1,0 +1,33 @@
+# Requirements for ComfyUI Video Nodes
+
+# Core dependencies
+torch>=2.0.0
+torchvision
+numpy>=1.20.0
+pillow>=9.0.0
+opencv-python>=4.5.0
+
+# Model dependencies
+transformers>=4.30.0
+diffusers>=0.21.0
+accelerate>=0.20.0
+safetensors>=0.3.0
+sentencepiece>=0.1.99
+einops>=0.6.0
+timm>=0.9.0
+
+# Optimization dependencies
+xformers>=0.0.20  # For memory efficient attention
+bitsandbytes>=0.41.0  # For INT8/NF4 quantization
+optimum[quanto]>=1.13.0  # For FP8 quantization
+
+# Video processing
+imageio>=2.30.0
+imageio-ffmpeg>=0.4.8
+
+# System monitoring
+psutil>=5.9.0
+
+# Optional but recommended
+flash-attn>=2.0.0  # For faster attention (requires compatible GPU)
+triton>=2.0.0  # For optimized kernels

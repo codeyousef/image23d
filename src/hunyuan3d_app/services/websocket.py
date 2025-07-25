@@ -353,21 +353,49 @@ class ProgressStreamManager:
             Progress callback function
         """
         def callback(progress: float, message: str):
-            # Run in event loop
-            asyncio.create_task(
-                self.stream_progress(
-                    task_id,
-                    ProgressUpdate(
-                        task_id=task_id,
-                        type=MessageType.PROGRESS,
-                        data={
-                            "progress": progress,
-                            "message": message,
-                            "task_type": task_type
-                        }
+            # Thread-safe way to schedule async task
+            try:
+                # Try to get the current event loop
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If loop is running, use call_soon_threadsafe
+                    asyncio.run_coroutine_threadsafe(
+                        self.stream_progress(
+                            task_id,
+                            ProgressUpdate(
+                                task_id=task_id,
+                                type=MessageType.PROGRESS,
+                                data={
+                                    "progress": progress,
+                                    "message": message,
+                                    "task_type": task_type
+                                }
+                            )
+                        ),
+                        loop
                     )
-                )
-            )
+                else:
+                    # No running loop, create task
+                    asyncio.create_task(
+                        self.stream_progress(
+                            task_id,
+                            ProgressUpdate(
+                                task_id=task_id,
+                                type=MessageType.PROGRESS,
+                                data={
+                                    "progress": progress,
+                                    "message": message,
+                                    "task_type": task_type
+                                }
+                            )
+                        )
+                    )
+            except RuntimeError:
+                # No event loop running, log the progress instead
+                logger.info(f"Progress [{task_id}]: {progress:.1%} - {message}")
+            except Exception as e:
+                logger.error(f"Failed to send progress update: {e}")
+                logger.info(f"Progress [{task_id}]: {progress:.1%} - {message}")
             
         return callback
         
@@ -514,6 +542,20 @@ def get_progress_manager() -> ProgressStreamManager:
             logger.info("Created global ProgressStreamManager instance")
             
     return _progress_manager
+
+
+def create_websocket_progress_callback(task_id: str, task_type: str = "generation"):
+    """Create a websocket progress callback for a task
+    
+    Args:
+        task_id: Unique task identifier
+        task_type: Type of task
+        
+    Returns:
+        Progress callback function
+    """
+    manager = get_progress_manager()
+    return manager.create_progress_callback(task_id, task_type)
 
 
 async def start_progress_server(host: str = "localhost", port: int = 8765):

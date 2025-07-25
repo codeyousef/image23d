@@ -8,6 +8,7 @@ Implements the orchestration framework from Managing Multiple AI Models guide:
 """
 
 import logging
+import traceback
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -438,9 +439,13 @@ class ThreeDOrchestrator:
             raise RuntimeError(f"No suitable model available: {reason}")
             
         logger.info(f"Selected model: {reason}")
+        logger.info(f"[ORCHESTRATOR] Model selection result: {selected_model.value}")
         
         # Load model if not current
         if self.model_swapper.current_model_name != selected_model.value:
+            logger.info(f"[ORCHESTRATOR] Current model ({self.model_swapper.current_model_name}) != selected model ({selected_model.value})")
+            logger.info(f"[ORCHESTRATOR] Loading new model: {selected_model.value}")
+            
             if progress_callback:
                 progress_callback(0.0, f"Loading {selected_model.value}...")
                 
@@ -489,8 +494,8 @@ class ThreeDOrchestrator:
             else:
                 logger.info(f"Using {use_quantization} quantization for memory efficiency")
             
-            # Apply quantization settings before generation
-            if hasattr(model, 'config'):
+            # Apply quantization settings before generation only if GGUF is available
+            if hasattr(model, 'config') and self._check_gguf_available(model.config.model_variant, use_quantization):
                 model.config.gguf_quantization = use_quantization
                 model.config.use_gguf = True
                 
@@ -511,10 +516,21 @@ class ThreeDOrchestrator:
                 
         # Generate with selected model
         try:
+            # Prepare parameters for HunYuan3D model
+            # The model expects prompt as first arg and image as keyword arg
+            if isinstance(input_data, str):
+                prompt = input_data
+                image = None
+            else:
+                # For image input, use a generic prompt
+                prompt = "a high quality 3D model"
+                image = input_data
+            
             result = model.generate(
-                input_data,
+                prompt=prompt,
+                image=image,
                 quality=requirements.quality_preset,
-                output_format=requirements.output_format,
+                format=requirements.output_format,
                 progress_callback=progress_callback
             )
             
@@ -528,45 +544,56 @@ class ThreeDOrchestrator:
             
         except Exception as e:
             logger.error(f"Generation failed with {selected_model.value}: {e}")
+            logger.error(f"Full error traceback: {traceback.format_exc()}")
             
-            # Try fallback model if available
-            if selected_model == ModelType3D.HUNYUAN3D_21:
-                logger.info("Trying fallback to mini model...")
+            # Disable automatic fallback to mini model to avoid confusion
+            # The user explicitly requested a specific model, so we should fail clearly
+            # rather than silently switching to a different model
+            logger.error(f"Generation failed. Not attempting fallback to avoid unexpected model switches.")
+            raise RuntimeError(f"3D generation failed with {selected_model.value}: {str(e)}")
                 
-                # Adjust requirements for mini model capabilities
-                # According to the guide, mini model has limited capabilities
-                adjusted_requirements = TaskRequirements(
-                    input_type=requirements.input_type,
-                    quality_preset=requirements.quality_preset,
-                    output_format=requirements.output_format,
-                    required_capabilities=[cap for cap in requirements.required_capabilities 
-                                         if cap != ModelCapability.PBR_MATERIALS],  # Remove PBR for mini
-                    max_generation_time=requirements.max_generation_time,
-                    max_memory_gb=6.0,  # Force mini model memory limit
-                    preferred_model=requirements.preferred_model
-                )
                 
-                # If still requesting high quality, downgrade to standard for mini
-                if adjusted_requirements.quality_preset in ["high", "ultra"]:
-                    logger.info("Downgrading quality preset from %s to standard for mini model", 
-                               adjusted_requirements.quality_preset)
-                    adjusted_requirements.quality_preset = "standard"
-                    # Also remove high resolution capability
-                    adjusted_requirements.required_capabilities = [
-                        cap for cap in adjusted_requirements.required_capabilities 
-                        if cap != ModelCapability.HIGH_RESOLUTION
-                    ]
+    def _check_gguf_available(self, model_variant: str, quantization: str = "Q8_0") -> bool:
+        """Check if GGUF model files are available"""
+        from pathlib import Path
+        from ...config import MODELS_DIR
+        
+        # Check for GGUF file in expected location
+        gguf_filename = f"hunyuan3d-{quantization}.gguf"
+        model_base_path = MODELS_DIR / "3d" / model_variant
+        
+        # Check different possible paths
+        possible_paths = [
+            model_base_path / "hunyuan3d-dit-v2-1" / gguf_filename,
+            model_base_path / "hunyuan3d-dit-mini" / gguf_filename,
+            model_base_path / gguf_filename,
+        ]
+        
+        for path in possible_paths:
+            if path.exists():
+                logger.info(f"Found GGUF model at: {path}")
+                return True
                 
-                return self.generate(input_data, adjusted_requirements, progress_callback)
-            else:
-                raise
+        logger.info(f"No GGUF models found for {model_variant}, will use standard model")
+        return False
                 
     def _load_hunyuan3d_21(self) -> HunYuan3DModel:
         """Load HunYuan3D 2.1 model"""
+        logger.info("\n" + "="*80)
+        logger.info("[ORCHESTRATOR] Loading HunYuan3D 2.1 model")
+        
+        # Check if GGUF model is available
+        use_gguf = self._check_gguf_available("hunyuan3d-21", "Q8_0")
+        
+        logger.info(f"[ORCHESTRATOR] Creating HunYuan3DModel with:")
+        logger.info(f"  - model_variant: hunyuan3d-21")
+        logger.info(f"  - use_gguf: {use_gguf}")
+        logger.info(f"  - device: {'cuda' if torch.cuda.is_available() else 'cpu'}")
+        
         model = HunYuan3DModel(
-            variant="hunyuan3d-21",
-            use_gguf=True,
-            quantization="Q8_0",
+            model_variant="hunyuan3d-21",
+            use_gguf=use_gguf,
+            gguf_quantization="Q8_0" if use_gguf else None,
             device="cuda" if torch.cuda.is_available() else "cpu"
         )
         
@@ -605,10 +632,13 @@ class ThreeDOrchestrator:
         
     def _load_hunyuan3d_mini(self) -> HunYuan3DModel:
         """Load HunYuan3D mini model"""
+        # Check if GGUF model is available
+        use_gguf = self._check_gguf_available("hunyuan3d-2mini", "Q6_K")
+        
         model = HunYuan3DModel(
-            variant="hunyuan3d-2mini",
-            use_gguf=True,
-            quantization="Q6_K",  # More aggressive quantization for mini
+            model_variant="hunyuan3d-2mini",
+            use_gguf=use_gguf,
+            gguf_quantization="Q6_K" if use_gguf else None,  # More aggressive quantization for mini
             device="cuda" if torch.cuda.is_available() else "cpu"
         )
         

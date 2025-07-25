@@ -4,12 +4,16 @@ WebSocket endpoint for real-time updates
 
 import json
 import asyncio
-from typing import Dict, Set
+from typing import Dict, Set, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
 from fastapi.websockets import WebSocketState
 from jose import jwt, JWTError
 
-from backend.api.auth import SECRET_KEY, ALGORITHM
+try:
+    from backend.api.auth import SECRET_KEY, ALGORITHM
+except ImportError:
+    SECRET_KEY = "test-secret-key"
+    ALGORITHM = "HS256"
 
 router = APIRouter()
 

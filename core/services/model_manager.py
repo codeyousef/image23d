@@ -27,7 +27,7 @@ class ModelManager:
             
         try:
             # Import the existing model manager
-            from src.hunyuan3d_app.models.manager import ModelManager as HunyuanModelManager
+            from hunyuan3d_app.models.manager import ModelManager as HunyuanModelManager
             from pathlib import Path
             
             # Create instance of existing manager
@@ -40,9 +40,18 @@ class ModelManager:
             self._initialized = True
             logger.info("Model manager initialized successfully")
             
+        except ImportError as e:
+            logger.warning(f"Hunyuan3D models not available: {e}")
+            logger.info("Using mock model manager for desktop interface")
+            # Use a mock implementation
+            self._model_manager = MockModelManager()
+            self._initialized = True
+            
         except Exception as e:
             logger.error(f"Failed to initialize model manager: {e}")
-            raise
+            # Use mock but still log the error
+            self._model_manager = MockModelManager()
+            self._initialized = True
             
     def _ensure_initialized(self):
         """Ensure the model manager is initialized"""
@@ -130,6 +139,80 @@ class ModelManager:
         """Get information about a model"""
         self._ensure_initialized()
         return self._model_manager.get_model_info(model_id)
+    
+    def get_available_models(self, model_type: str = "all") -> Dict[str, Any]:
+        """Get available models as a dictionary (for compatibility with desktop app)"""
+        self._ensure_initialized()
+        
+        logger.debug(f"get_available_models called with model_type: {model_type}")
+        
+        # Delegate to the wrapped manager if it has the method
+        if hasattr(self._model_manager, 'get_available_models'):
+            model_infos = self._model_manager.get_available_models(model_type)
+            logger.debug(f"Wrapped manager returned {len(model_infos)} models for type {model_type}")
+            
+            # Convert ModelInfo objects to dicts if needed
+            models_dict = {}
+            for model_id, model_info in model_infos.items():
+                if hasattr(model_info, 'to_dict'):
+                    # It's a ModelInfo object
+                    info_dict = model_info.to_dict()
+                    
+                    # Filter by model type - only include models that match the requested type
+                    actual_model_type = info_dict.get('model_type', '')
+                    
+                    # Handle type aliases
+                    if model_type == "threed":
+                        requested_type = "3d"
+                    else:
+                        requested_type = model_type
+                    
+                    # Skip models that don't match the requested type (unless requesting "all")
+                    if model_type != "all" and actual_model_type != requested_type:
+                        logger.debug(f"Filtering out model {model_id} with type {actual_model_type} (requested {requested_type})")
+                        continue
+                    
+                    # Add extra fields that desktop app expects
+                    info_dict['is_available'] = self.is_model_available(model_id)
+                    info_dict['is_loaded'] = self.is_model_loaded(model_id)
+                    models_dict[model_id] = info_dict
+                else:
+                    # It's already a dict
+                    # Apply same filtering for dict models
+                    actual_model_type = model_info.get('model_type', model_info.get('type', ''))
+                    requested_type = "3d" if model_type == "threed" else model_type
+                    
+                    if model_type != "all" and actual_model_type != requested_type:
+                        logger.debug(f"Filtering out dict model {model_id} with type {actual_model_type} (requested {requested_type})")
+                        continue
+                        
+                    models_dict[model_id] = model_info
+                    
+            return models_dict
+        
+        # Otherwise, convert list_available_models output to dict format
+        logger.debug(f"Falling back to list_available_models for type {model_type}")
+        # Don't convert "threed" to None - pass it through
+        list_model_type = None if model_type == "all" else model_type
+        models_list = self.list_available_models(list_model_type)
+        models_dict = {}
+        
+        for model in models_list:
+            model_id = model.get('id')
+            if model_id:
+                # Convert to ModelInfo-like dict
+                models_dict[model_id] = {
+                    'name': model.get('name', model_id),
+                    'description': model.get('description', ''),
+                    'size': model.get('size', 'Unknown'),
+                    'vram_required': model.get('vram_required', 'Unknown'),
+                    'type': model.get('type', 'unknown'),
+                    'repo_id': model.get('repo_id', model_id),
+                    'is_available': model.get('is_available', False),
+                    'is_loaded': model.get('is_loaded', False)
+                }
+        
+        return models_dict
         
     def list_available_models(self, model_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """List all available models, optionally filtered by type"""
@@ -155,42 +238,111 @@ class ModelManager:
             except ImportError as e:
                 logger.warning(f"Failed to import image models config: {e}")
                 
-        if model_type in [None, "3d"]:
+        # Handle various 3D model type aliases  
+        if model_type in [None, "3d", "threed"]:
             try:
                 # Try src config first, then core config
                 try:
-                    from src.hunyuan3d_app.config import ALL_3D_MODELS
+                    from src.hunyuan3d_app.config import ALL_3D_MODELS, HUNYUAN3D_MODELS
+                    # Use HUNYUAN3D_MODELS if available, otherwise ALL_3D_MODELS
+                    models_config = HUNYUAN3D_MODELS if 'HUNYUAN3D_MODELS' in locals() else ALL_3D_MODELS
                 except ImportError:
-                    from core.config import ALL_3D_MODELS
+                    try:
+                        from core.config import ALL_3D_MODELS
+                        models_config = ALL_3D_MODELS
+                    except ImportError:
+                        # Fallback to hardcoded models
+                        models_config = {
+                            "hunyuan3d-21": {
+                                "name": "HunYuan3D 2.1",
+                                "description": "Latest HunYuan3D model with improved quality",
+                                "size": "15GB",
+                                "vram_required": "16GB"
+                            },
+                            "hunyuan3d-20": {
+                                "name": "HunYuan3D 2.0", 
+                                "description": "Stable HunYuan3D model",
+                                "size": "12GB",
+                                "vram_required": "12GB"
+                            },
+                            "hunyuan3d-2mini": {
+                                "name": "HunYuan3D 2 Mini",
+                                "description": "Lightweight HunYuan3D model",
+                                "size": "8GB", 
+                                "vram_required": "8GB"
+                            }
+                        }
+                        
+                for model_id, config in models_config.items():
+                    # Handle both dict and object configs
+                    if hasattr(config, 'name'):
+                        # It's a ThreeDModelConfig object
+                        model_info = {
+                            "id": model_id,
+                            "type": "3d",
+                            "name": config.name,
+                            "description": config.description,
+                            "size": config.size,
+                            "vram_required": config.vram_required,
+                            "is_available": self.is_model_available(model_id),
+                            "is_loaded": self.is_model_loaded(model_id)
+                        }
+                    else:
+                        # It's a dictionary
+                        model_info = {
+                            "id": model_id,
+                            "type": "3d",
+                            "name": config.get("name", model_id),
+                            "description": config.get("description", ""),
+                            "size": config.get("size", "Unknown"),
+                            "vram_required": config.get("vram_required", "Unknown"),
+                            "is_available": self.is_model_available(model_id),
+                            "is_loaded": self.is_model_loaded(model_id)
+                        }
+                    models.append(model_info)
                     
-                for model_id, config in ALL_3D_MODELS.items():
-                    models.append({
-                        "id": model_id,
-                        "type": "3d",
-                        "name": config["name"],
-                        "description": config["description"],
-                        "size": config["size"],
-                        "vram_required": config["vram_required"],
-                        "is_available": self.is_model_available(model_id),
-                        "is_loaded": self.is_model_loaded(model_id)
-                    })
-            except ImportError as e:
+            except Exception as e:
                 logger.warning(f"Failed to import 3D models config: {e}")
+                
+        # Handle Sparc3D models
+        if model_type in ["sparc3d"]:
+            # Add Sparc3D specific models here if needed
+            pass
+            
+        # Handle Hi3DGen models  
+        if model_type in ["hi3dgen"]:
+            # Add Hi3DGen specific models here if needed
+            pass
                 
         if model_type in [None, "video"]:
             try:
                 from src.hunyuan3d_app.config import VIDEO_MODELS
                 for model_id, config in VIDEO_MODELS.items():
-                    models.append({
-                        "id": model_id,
-                        "type": "video",
-                        "name": config["name"],
-                        "description": config["description"],
-                        "size": config["size"],
-                        "vram_required": config["vram_required"],
-                        "is_available": self.is_model_available(model_id),
-                        "is_loaded": self.is_model_loaded(model_id)
-                    })
+                    # Handle both dict and object configs
+                    if hasattr(config, 'name'):
+                        # It's a VideoModelConfig object
+                        models.append({
+                            "id": model_id,
+                            "type": "video",
+                            "name": config.name,
+                            "description": config.description,
+                            "size": config.size,
+                            "vram_required": config.vram_required,
+                            "is_available": self.is_model_available(model_id),
+                            "is_loaded": self.is_model_loaded(model_id)
+                        })
+                    else:
+                        # It's a dictionary
+                        models.append({
+                            "id": model_id,
+                            "type": "video",
+                            "name": config["name"],
+                            "description": config["description"],
+                            "size": config["size"],
+                            "vram_required": config["vram_required"],
+                            "is_available": self.is_model_available(model_id),
+                            "is_loaded": self.is_model_loaded(model_id)
+                        })
             except ImportError as e:
                 logger.warning(f"Failed to import video models config: {e}")
                 
@@ -266,7 +418,19 @@ class ModelManager:
     def unload_model(self, model_id: str):
         """Unload a model from memory"""
         self._ensure_initialized()
-        return self._model_manager.unload_model(model_id)
+        # Determine model type from model_id and use the appropriate method
+        if hasattr(self._model_manager, 'unload_model_by_type'):
+            # Try to determine model type
+            if "flux" in model_id.lower() or "sd" in model_id.lower():
+                return self._model_manager.unload_model_by_type("image")
+            elif "3d" in model_id.lower() or "hunyuan3d" in model_id.lower():
+                return self._model_manager.unload_model_by_type("3d")
+            else:
+                # Default to image
+                return self._model_manager.unload_model_by_type("image")
+        else:
+            # Fallback to parameterless unload_model
+            return self._model_manager.unload_model()
         
     def get_memory_usage(self) -> Dict[str, Any]:
         """Get current memory usage statistics"""
@@ -397,3 +561,63 @@ class ModelManager:
                 return True
         
         return False
+
+
+class MockModelManager:
+    """Mock model manager for when HunYuan3D models are not available"""
+    
+    def __init__(self):
+        self._loaded_models = {}
+        
+    def get_available_models(self, model_type=None):
+        """Return mock models"""
+        if model_type == "3d" or model_type == "threed":
+            return {
+                "hunyuan3d-21": {
+                    "name": "HunYuan3D 2.1",
+                    "description": "Latest HunYuan3D model (Mock)",
+                    "size": "15GB",
+                    "vram_required": "16GB",
+                    "model_type": "3d",
+                    "is_available": False,
+                    "is_loaded": False
+                },
+                "hunyuan3d-2mini": {
+                    "name": "HunYuan3D 2 Mini", 
+                    "description": "Lightweight HunYuan3D model (Mock)",
+                    "size": "8GB",
+                    "vram_required": "8GB",
+                    "model_type": "3d",
+                    "is_available": False,
+                    "is_loaded": False
+                }
+            }
+        elif model_type == "image":
+            return {
+                "flux-1-dev": {
+                    "name": "FLUX.1 Dev",
+                    "description": "FLUX.1 Development model (Mock)",
+                    "size": "25GB",
+                    "vram_required": "24GB",
+                    "model_type": "image",
+                    "is_available": False,
+                    "is_loaded": False
+                }
+            }
+        return {}
+        
+    def is_model_available(self, model_id):
+        return False
+        
+    def is_model_loaded(self, model_id):
+        return model_id in self._loaded_models
+        
+    def get_downloaded_models(self, model_type):
+        return []
+        
+    def unload_model(self):
+        self._loaded_models.clear()
+        
+    def download_model(self, model_id, model_type):
+        logger.info(f"Mock download of {model_id}")
+        return True

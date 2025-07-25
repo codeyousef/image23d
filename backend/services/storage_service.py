@@ -10,7 +10,11 @@ from datetime import datetime
 import aiofiles
 import hashlib
 
-from core.config import OUTPUT_DIR
+try:
+    from core.config import OUTPUT_DIR
+except ImportError:
+    from pathlib import Path
+    OUTPUT_DIR = Path("outputs")
 
 class StorageService:
     """

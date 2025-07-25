@@ -11,15 +11,15 @@ if __name__ == "__main__":
     if parent_dir not in sys.path:
         sys.path.insert(0, parent_dir)
         
-    from hunyuan3d_app.hunyuan3d_studio_enhanced import Hunyuan3DStudioEnhanced
-    from hunyuan3d_app.ui_enhanced import create_enhanced_interface
-    from hunyuan3d_app.gpu_optimizer import get_gpu_optimizer
-    from hunyuan3d_app.system_checker import check_system_requirements
+    from hunyuan3d_app.core.studio_enhanced import Hunyuan3DStudioEnhanced
+    from hunyuan3d_app.ui.enhanced import create_enhanced_interface
+    from hunyuan3d_app.utils.gpu import get_gpu_optimizer
+    from hunyuan3d_app.utils.system import check_system_requirements
 else:
-    from .hunyuan3d_studio_enhanced import Hunyuan3DStudioEnhanced
-    from .ui_enhanced import create_enhanced_interface
-    from .gpu_optimizer import get_gpu_optimizer
-    from .system_checker import check_system_requirements
+    from .core.studio_enhanced import Hunyuan3DStudioEnhanced
+    from .ui.enhanced import create_enhanced_interface
+    from .utils.gpu import get_gpu_optimizer
+    from .utils.system import check_system_requirements
 
 # Set up logging
 logging.basicConfig(

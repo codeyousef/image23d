@@ -53,7 +53,7 @@ class WebSocketProgressClient:
                 # Listen for messages
                 await self._listen()
                 
-            except ConnectionRefused:
+            except ConnectionRefusedError:
                 retry_count += 1
                 logger.warning(f"WebSocket connection refused, retry {retry_count}/{max_retries}")
                 await asyncio.sleep(2 ** retry_count)  # Exponential backoff

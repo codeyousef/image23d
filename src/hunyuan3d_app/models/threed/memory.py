@@ -58,13 +58,7 @@ def unload_model_completely(model, optimizer=None):
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
         
-    # Additional aggressive cleanup from the guide
-    for obj in gc.get_objects():
-        try:
-            if torch.is_tensor(obj) and obj.is_cuda:
-                del obj
-        except:
-            pass
+    # Force garbage collection after model cleanup
     gc.collect()
 
 
@@ -388,6 +382,27 @@ class ThreeDMemoryManager:
                 self.fragmentation_counter = 0
         
         return freed
+    
+    def log_memory_status(self):
+        """Log current memory status"""
+        try:
+            available_memory = self.get_available_memory()
+            system_memory = psutil.virtual_memory()
+            
+            logger.info(f"Memory Status - Available: {available_memory:.1f}GB, "
+                       f"System Total: {system_memory.total / (1024**3):.1f}GB, "
+                       f"System Used: {system_memory.percent:.1f}%")
+            
+            if torch.cuda.is_available():
+                gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                gpu_allocated = torch.cuda.memory_allocated() / (1024**3)
+                gpu_cached = torch.cuda.memory_reserved() / (1024**3)
+                
+                logger.info(f"GPU Memory - Total: {gpu_memory:.1f}GB, "
+                           f"Allocated: {gpu_allocated:.1f}GB, "
+                           f"Cached: {gpu_cached:.1f}GB")
+        except Exception as e:
+            logger.warning(f"Failed to log memory status: {e}")
     
     @contextmanager
     def optimize_memory_usage(self):

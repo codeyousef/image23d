@@ -2,10 +2,19 @@
 Backend services initialization
 """
 
-from backend.services.model_service import ModelService
-from backend.services.queue_service import QueueService
+try:
+    from backend.services.model_service import ModelService
+    from backend.services.queue_service import QueueService  
+    from backend.services.credit_service import CreditService
+except ImportError:
+    # Fallback to simple services for testing
+    from backend.services.simple_model_service import ModelService
+    from backend.services.simple_queue_service import QueueService
+    from backend.services.simple_credit_service import CreditService
+
 from backend.services.storage_service import StorageService
-from backend.services.credit_service import CreditService
+from backend.services.job_service import job_service
+from backend.services.history_service import history_service
 
 # Service instances
 model_service = None
@@ -28,6 +37,8 @@ async def init_services():
     await queue_service.initialize()
     await storage_service.initialize()
     await credit_service.initialize()
+    await job_service.initialize()
+    await history_service.initialize()
     
     print("✅ All services initialized")
 

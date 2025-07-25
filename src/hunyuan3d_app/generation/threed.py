@@ -16,6 +16,7 @@ from ..models.threed.orchestrator import (
     ModelCapability
 )
 from ..models.threed.base import QUALITY_PRESETS_3D
+from ..services.websocket import create_websocket_progress_callback
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,18 @@ class ThreeDGenerator:
         start_time = time.time()
         self.generation_count += 1
         
+        # Create websocket progress callback if none provided
+        if progress_callback is None:
+            task_id = f"3d_gen_{int(time.time())}_{self.generation_count}"
+            progress_callback = create_websocket_progress_callback(task_id, "3d_generation")
+            logger.info(f"Created websocket progress callback for task: {task_id}")
+        
         try:
+            logger.info("\n" + "="*80)
+            logger.info(f"[3D_GENERATION] Starting 3D generation")
+            logger.info(f"[3D_GENERATION] Model type requested: '{model_type}'")
+            logger.info(f"[3D_GENERATION] Quality preset: {quality_preset}")
+            
             # Validate inputs
             if quality_preset not in QUALITY_PRESETS_3D:
                 raise ValueError(f"Invalid quality preset: {quality_preset}")
@@ -77,7 +89,7 @@ class ThreeDGenerator:
             if enable_pbr:
                 required_capabilities.append(ModelCapability.PBR_MATERIALS)
                 
-            if quality_preset in ["high", "ultra"]:
+            if quality_preset in {"high", "ultra"}:
                 required_capabilities.append(ModelCapability.HIGH_RESOLUTION)
                 
             requirements = TaskRequirements(
@@ -100,7 +112,10 @@ class ThreeDGenerator:
                     "sparc3d": "sparc3d"
                 }
                 
+                logger.info(f"[3D_GENERATION] Looking up model mapping for: '{model_type.lower()}'")
                 internal_model = model_mapping.get(model_type.lower())
+                logger.info(f"[3D_GENERATION] Mapped to internal model: '{internal_model}'")
+                
                 if internal_model:
                     # Filter available models
                     from ..models.threed.base import ModelType3D
@@ -108,11 +123,14 @@ class ThreeDGenerator:
                         m for m in self.orchestrator.available_models
                         if m.value == internal_model
                     ]
+                    logger.info(f"[3D_GENERATION] Available models: {[m.value for m in self.orchestrator.available_models]}")
+                    logger.info(f"[3D_GENERATION] Filtered models matching '{internal_model}': {[m.value for m in available_models]}")
                     
                     if available_models:
                         # Create a new requirements object with preferred model
                         # Don't modify orchestrator's available models list!
                         requirements.preferred_model = internal_model
+                        logger.info(f"[3D_GENERATION] Set preferred model to: '{internal_model}'")
                     else:
                         logger.warning(f"Model {model_type} not available, using auto selection")
                         
@@ -127,14 +145,39 @@ class ThreeDGenerator:
             generation_time = time.time() - start_time
             
             # Create preview render
-            preview_image = self._create_preview(result)
+            preview_image = None
+            try:
+                preview_image = self._create_preview(result)
+            except Exception as e:
+                logger.warning(f"Failed to create preview image: {e}")
+                preview_image = None
+            
+            # Log intermediate outputs for debugging
+            if "intermediate_outputs" in result:
+                logger.info(f"[3D_GENERATION] Intermediate outputs available: {list(result['intermediate_outputs'].keys())}")
+            
+            # Track generated images/views
+            generated_images = []
+            if "intermediate_outputs" in result and "views" in result["intermediate_outputs"]:
+                generated_images = result["intermediate_outputs"]["views"]
+                logger.info(f"[3D_GENERATION] Found {len(generated_images)} generated view images")
+            
+            logger.info(f"[3D_GENERATION] Preparing final response...")
+                
+            # Report completion with generated images info
+            if progress_callback:
+                if generated_images:
+                    progress_callback(1.0, f"Complete! Generated {len(generated_images)} views and 3D model")
+                else:
+                    progress_callback(1.0, "Complete! Generated 3D model")
             
             # Prepare response
-            return {
+            response = {
                 "output_path": result["output_path"],
                 "preview_image": preview_image,
                 "generation_time": generation_time,
                 "model_used": result["model_used"],
+                "generated_images": generated_images,  # Add generated images to response
                 "metadata": {
                     "quality_preset": quality_preset,
                     "output_format": output_format,
@@ -144,9 +187,12 @@ class ThreeDGenerator:
                     "memory_used_gb": result.get("memory_used_gb", 0),
                     "quantization": result.get("quantization"),
                     "generation_count": self.generation_count,
-                    "views_generated": len(result.get("views", [])),
+                    "views_generated": len(generated_images),
                 }
             }
+            
+            logger.info(f"[3D_GENERATION] Generation completed successfully! Output: {response['output_path']}")
+            return response
             
         except Exception as e:
             logger.error(f"3D generation failed: {e}")

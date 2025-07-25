@@ -108,18 +108,22 @@ class MemoryManager:
             "recommendations": []
         }
         
-        if not result["has_enough_memory"]:
-            deficit = total_required - available
-            result["deficit_gb"] = deficit
+        # Early return if enough memory
+        if result["has_enough_memory"]:
+            return result
             
-            # Add recommendations
-            if model_size_gb >= 10:  # Q8 models
-                result["recommendations"].append("Use sequential CPU offload for Q8 models")
-                result["recommendations"].append("Consider using Q6 or Q5 quantization instead")
-            
-            result["recommendations"].append("Enable VAE slicing and tiling")
-            result["recommendations"].append("Reduce batch size to 1")
-            result["recommendations"].append("Lower resolution if possible")
+        # Calculate deficit and add recommendations
+        deficit = total_required - available
+        result["deficit_gb"] = deficit
+        
+        # Add recommendations
+        if model_size_gb >= 10:  # Q8 models
+            result["recommendations"].append("Use sequential CPU offload for Q8 models")
+            result["recommendations"].append("Consider using Q6 or Q5 quantization instead")
+        
+        result["recommendations"].append("Enable VAE slicing and tiling")
+        result["recommendations"].append("Reduce batch size to 1")
+        result["recommendations"].append("Lower resolution if possible")
         
         return result
     

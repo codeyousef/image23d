@@ -357,9 +357,9 @@ def create_lora_tab(app: Any) -> None:
                 return "<p>No LoRAs found matching your criteria.</p>"
                 
             # Build gallery HTML
-            html = """
+            html_parts = ["""
             <div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px;'>
-            """
+            """]
             
             for lora in filtered_loras:
                 # Get preview image
@@ -374,7 +374,7 @@ def create_lora_tab(app: Any) -> None:
                 if len(lora.trigger_words) > 3:
                     triggers += f" (+{len(lora.trigger_words)-3} more)"
                     
-                html += f"""
+                html_parts.append(f"""
                 <div class='lora-card' style='border: 1px solid #ddd; border-radius: 12px; overflow: hidden; cursor: pointer; transition: transform 0.2s;'
                      onclick='selectLoRA("{lora.name}")'>
                     {preview_img}
@@ -390,9 +390,9 @@ def create_lora_tab(app: Any) -> None:
                         </p>
                     </div>
                 </div>
-                """
+                """)
                 
-            html += """
+            html_parts.append("""
             </div>
             <script>
             function selectLoRA(loraName) {
@@ -401,9 +401,9 @@ def create_lora_tab(app: Any) -> None:
                 document.querySelector('#selected_lora_id textarea').dispatchEvent(new Event('input'));
             }
             </script>
-            """
+            """)
             
-            return html
+            return "".join(html_parts)
             
         except Exception as e:
             return f"<p style='color: red;'>Error loading LoRA gallery: {str(e)}</p>"
@@ -586,18 +586,18 @@ def create_lora_tab(app: Any) -> None:
             if not suggestions:
                 return "<p>No LoRA suggestions found for this prompt</p>"
                 
-            html = """
+            html_parts = ["""
             <div style='padding: 15px; background: #f8f9fa; border-radius: 8px;'>
                 <h4>🤖 Suggested LoRAs:</h4>
                 <div style='display: flex; flex-direction: column; gap: 10px;'>
-            """
+            """]
             
             for suggestion in suggestions[:5]:  # Top 5 suggestions
                 confidence = suggestion.get('confidence', 0) * 100
                 lora_name = suggestion.get('lora_name', 'Unknown')
                 reason = suggestion.get('reason', 'Good match for prompt')
                 
-                html += f"""
+                html_parts.append(f"""
                 <div style='padding: 10px; background: white; border-radius: 6px; border-left: 4px solid #2196f3;'>
                     <div style='display: flex; justify-content: space-between; align-items: center;'>
                         <strong>{lora_name}</strong>
@@ -605,14 +605,14 @@ def create_lora_tab(app: Any) -> None:
                     </div>
                     <p style='margin: 5px 0 0 0; color: #666; font-size: 0.9em;'>{reason}</p>
                 </div>
-                """
+                """)
                 
-            html += """
+            html_parts.append("""
                 </div>
             </div>
-            """
+            """)
             
-            return html
+            return "".join(html_parts)
             
         except Exception as e:
             return f"<p style='color: red;'>Error suggesting LoRAs: {str(e)}</p>"

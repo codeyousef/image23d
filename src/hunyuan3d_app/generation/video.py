@@ -1,8 +1,16 @@
-"""Video generation module supporting multiple open-source models"""
+"""Video generation module supporting multiple open-source models
+
+Integrates with the new video model implementations:
+- Wan2.1 (1.3B/14B)
+- HunyuanVideo (13B)
+- LTX-Video (2B real-time)
+- Mochi-1 (10B)
+- CogVideoX-5B (5B I2V specialist)
+"""
 
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple, Callable, List
+from typing import Optional, Dict, Any, Tuple, Callable, List, Union
 from dataclasses import dataclass
 from enum import Enum
 import time
@@ -11,14 +19,34 @@ import torch
 import numpy as np
 from PIL import Image
 
+# Import new video models
+from ..models.video import (
+    VideoModelType,
+    VideoFormat,
+    VideoQualityPreset,
+    VIDEO_QUALITY_PRESETS,
+    VideoGenerationResult as ModelGenerationResult,
+    create_video_model,
+    auto_optimize_for_hardware,
+    VideoMemoryOptimizer,
+    OptimizationLevel
+)
+from ..models.video.memory_optimizer import MemoryProfile
+
 logger = logging.getLogger(__name__)
 
 
 class VideoModel(Enum):
     """Available video generation models"""
+    # Legacy names for backward compatibility
     LTXVIDEO = "ltxvideo"
     MOCHI_PREVIEW = "mochi-preview"
     COGVIDEOX_5B = "cogvideox-5b"
+    
+    # New model names
+    WAN2_1_1_3B = "wan2_1_1.3b"
+    WAN2_1_14B = "wan2_1_14b"
+    HUNYUANVIDEO = "hunyuanvideo"
 
 
 @dataclass
@@ -56,9 +84,23 @@ class VideoModelInfo:
 
 
 class VideoGenerator:
-    """Manages video generation with multiple models"""
+    """Manages video generation with multiple models
     
-    # Model configurations
+    This class now integrates with the new video model architecture,
+    providing backward compatibility while leveraging advanced features.
+    """
+    
+    # Model type mapping
+    MODEL_TYPE_MAP = {
+        VideoModel.LTXVIDEO: VideoModelType.LTX_VIDEO,
+        VideoModel.MOCHI_PREVIEW: VideoModelType.MOCHI_1,
+        VideoModel.COGVIDEOX_5B: VideoModelType.COGVIDEOX_5B,
+        VideoModel.WAN2_1_1_3B: VideoModelType.WAN2_1_1_3B,
+        VideoModel.WAN2_1_14B: VideoModelType.WAN2_1_14B,
+        VideoModel.HUNYUANVIDEO: VideoModelType.HUNYUANVIDEO
+    }
+    
+    # Model configurations (enhanced with new models)
     VIDEO_MODELS = {
         VideoModel.LTXVIDEO: VideoModelInfo(
             name="LTX-Video",
@@ -119,6 +161,66 @@ class VideoGenerator:
             generation_speed="~3min for 6s video",
             max_duration=6.0,
             supported_resolutions=[(512, 320), (720, 480), (1024, 576)]
+        ),
+        VideoModel.WAN2_1_1_3B: VideoModelInfo(
+            name="Wan2.1 1.3B",
+            model_id="Wan-AI/Wan2.1-T2V-1.3B",
+            capabilities=[
+                "consumer GPU friendly",
+                "visual text generation",
+                "multilingual"
+            ],
+            recommended_settings={
+                "width": 832,
+                "height": 480,
+                "fps": 24,
+                "duration": 5.0,
+                "steps": 50
+            },
+            vram_required=8.0,
+            generation_speed="~60s for 5s video",
+            max_duration=5.0,
+            supported_resolutions=[(832, 480), (1024, 576)]
+        ),
+        VideoModel.WAN2_1_14B: VideoModelInfo(
+            name="Wan2.1 14B",
+            model_id="Wan-AI/Wan2.1-T2V-14B",
+            capabilities=[
+                "professional quality",
+                "visual text generation",
+                "1080p support"
+            ],
+            recommended_settings={
+                "width": 1280,
+                "height": 720,
+                "fps": 24,
+                "duration": 5.0,
+                "steps": 50
+            },
+            vram_required=16.0,
+            generation_speed="~120s for 5s video",
+            max_duration=5.0,
+            supported_resolutions=[(1280, 720), (1920, 1080)]
+        ),
+        VideoModel.HUNYUANVIDEO: VideoModelInfo(
+            name="HunyuanVideo",
+            model_id="tencent/HunyuanVideo",
+            capabilities=[
+                "cinema quality",
+                "dual-stream architecture",
+                "30fps support"
+            ],
+            recommended_settings={
+                "width": 1280,
+                "height": 720,
+                "fps": 24,
+                "duration": 5.0,
+                "steps": 50
+            },
+            vram_required=24.0,
+            generation_speed="~180s for 5s video",
+            max_duration=5.0,
+            supported_resolutions=[(1280, 720), (1920, 1080)]
         )
     }
     
@@ -127,9 +229,15 @@ class VideoGenerator:
         self.models_dir = models_dir or Path("./models")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
+        # Legacy model storage
         self.models = {}
         self.current_model = None
         self.current_model_type = None
+        
+        # New model architecture
+        self.video_models = {}  # Store new model instances
+        self.memory_optimizer = VideoMemoryOptimizer()
+        self.auto_optimize = True  # Auto-optimize for hardware
         
     def get_available_models(self) -> Dict[str, VideoModelInfo]:
         """Get all available video models"""
@@ -144,7 +252,8 @@ class VideoGenerator:
         model_type: VideoModel,
         device: str = "cuda",
         dtype: torch.dtype = torch.float16,
-        progress_callback: Optional[Callable] = None
+        progress_callback: Optional[Callable] = None,
+        optimization_level: Optional[OptimizationLevel] = None
     ) -> Tuple[bool, str]:
         """Load a video generation model
         
@@ -166,28 +275,71 @@ class VideoGenerator:
                 del self.current_model
                 torch.cuda.empty_cache()
                 
+            # Clear new model instances
+            for model in self.video_models.values():
+                if hasattr(model, 'unload'):
+                    model.unload()
+            self.video_models.clear()
+                
             model_info = self.VIDEO_MODELS[model_type]
             
             if progress_callback:
                 progress_callback(0.1, f"Loading {model_info.name}...")
                 
-            # Model-specific loading
-            if model_type == VideoModel.LTXVIDEO:
-                model = self._load_ltxvideo(model_info, device, dtype, progress_callback)
-            elif model_type == VideoModel.MOCHI_PREVIEW:
-                model = self._load_mochi(model_info, device, dtype, progress_callback)
-            elif model_type == VideoModel.COGVIDEOX_5B:
-                model = self._load_cogvideox(model_info, device, dtype, progress_callback)
+            # Check if this is a new model type
+            if model_type in self.MODEL_TYPE_MAP:
+                # Use new model architecture
+                video_model_type = self.MODEL_TYPE_MAP[model_type]
+                
+                # Create model with factory
+                model = create_video_model(
+                    model_type=video_model_type,
+                    device=device,
+                    dtype="fp16" if dtype == torch.float16 else "fp32",
+                    cache_dir=self.cache_dir
+                )
+                
+                # Apply memory optimizations if needed
+                if self.auto_optimize:
+                    if progress_callback:
+                        progress_callback(0.2, "Optimizing for hardware...")
+                    
+                    if optimization_level:
+                        self.memory_optimizer.optimize_model(model, optimization_level)
+                    else:
+                        auto_optimize_for_hardware(model)
+                        
+                # Load the model
+                success = model.load(progress_callback)
+                if not success:
+                    return False, "Failed to load model"
+                    
+                self.video_models[model_type] = model
+                self.current_model = model
+                self.current_model_type = model_type
+                
+                if progress_callback:
+                    progress_callback(1.0, f"{model_info.name} loaded successfully")
+                    
+                return True, f"{model_info.name} loaded successfully"
             else:
-                return False, f"Unknown model type: {model_type}"
+                # Legacy loading for backward compatibility
+                if model_type == VideoModel.LTXVIDEO:
+                    model = self._load_ltxvideo(model_info, device, dtype, progress_callback)
+                elif model_type == VideoModel.MOCHI_PREVIEW:
+                    model = self._load_mochi(model_info, device, dtype, progress_callback)
+                elif model_type == VideoModel.COGVIDEOX_5B:
+                    model = self._load_cogvideox(model_info, device, dtype, progress_callback)
+                else:
+                    return False, f"Unknown model type: {model_type}"
+                    
+                self.current_model = model
+                self.current_model_type = model_type
                 
-            self.current_model = model
-            self.current_model_type = model_type
-            
-            if progress_callback:
-                progress_callback(1.0, f"{model_info.name} loaded successfully")
-                
-            return True, f"{model_info.name} loaded successfully"
+                if progress_callback:
+                    progress_callback(1.0, f"{model_info.name} loaded successfully")
+                    
+                return True, f"{model_info.name} loaded successfully"
             
         except Exception as e:
             logger.error(f"Failed to load video model: {e}")
@@ -368,7 +520,8 @@ class VideoGenerator:
     def generate_video(
         self,
         params: VideoGenerationParams,
-        progress_callback: Optional[Callable] = None
+        progress_callback: Optional[Callable] = None,
+        quality_preset: Optional[str] = None
     ) -> Tuple[Optional[List[Image.Image]], Dict[str, Any]]:
         """Generate a video
         
@@ -384,6 +537,12 @@ class VideoGenerator:
             
         try:
             start_time = time.time()
+            
+            # Check if using new model architecture
+            if self.current_model_type in self.video_models:
+                return self._generate_with_new_model(
+                    params, progress_callback, quality_preset
+                )
             
             if progress_callback:
                 progress_callback(0.0, "Preparing generation...")
@@ -517,6 +676,117 @@ class VideoGenerator:
         except Exception as e:
             logger.error(f"Video generation failed: {e}")
             return None, {"error": str(e)}
+            
+    def _generate_with_new_model(
+        self,
+        params: VideoGenerationParams,
+        progress_callback: Optional[Callable] = None,
+        quality_preset: Optional[str] = None
+    ) -> Tuple[Optional[List[Image.Image]], Dict[str, Any]]:
+        """Generate video using new model architecture"""
+        
+        model = self.video_models[self.current_model_type]
+        
+        # Get quality preset
+        if quality_preset and quality_preset in VIDEO_QUALITY_PRESETS:
+            preset = VIDEO_QUALITY_PRESETS[quality_preset]
+        else:
+            # Auto-select based on hardware
+            profile = self.memory_optimizer.profile_system()
+            preset = model.get_optimal_settings(profile.gpu_free)
+            
+        # Convert params to model format
+        num_frames = int(params.duration_seconds * params.fps)
+        
+        # Handle seed
+        seed = None if params.seed < 0 else params.seed
+        
+        # Generate video
+        result = model.generate(
+            prompt=params.prompt,
+            negative_prompt=params.negative_prompt,
+            num_frames=num_frames,
+            height=params.height,
+            width=params.width,
+            num_inference_steps=params.num_inference_steps,
+            guidance_scale=params.guidance_scale,
+            fps=params.fps,
+            motion_bucket_id=int(params.motion_strength * 127),
+            seed=seed,
+            progress_callback=progress_callback
+        )
+        
+        # Extract generation info
+        info = {
+            "model": self.current_model_type.value,
+            "duration": result.duration,
+            "fps": result.fps,
+            "resolution": f"{result.resolution[0]}x{result.resolution[1]}",
+            "frames": len(result.frames),
+            "generation_time": result.metadata.get("generation_time", "N/A"),
+            "seed": result.metadata.get("seed", seed),
+            "quality_preset": quality_preset or "auto",
+            "memory_usage": model.get_memory_usage()
+        }
+        
+        # Add model-specific metadata
+        info.update(result.metadata)
+        
+        return result.frames, info
+        
+    def generate_image_to_video(
+        self,
+        image: Union[str, np.ndarray, Image.Image],
+        params: VideoGenerationParams,
+        progress_callback: Optional[Callable] = None
+    ) -> Tuple[Optional[List[Image.Image]], Dict[str, Any]]:
+        """Generate video from image using I2V models"""
+        
+        if self.current_model is None:
+            return None, {"error": "No model loaded"}
+            
+        # Load image if path
+        if isinstance(image, str):
+            image = Image.open(image)
+            
+        # Check if model supports I2V
+        if self.current_model_type in self.video_models:
+            model = self.video_models[self.current_model_type]
+            
+            if not model.supports_feature("image_to_video"):
+                return None, {"error": f"{self.current_model_type.value} does not support image-to-video"}
+                
+            # Handle seed
+            seed = None if params.seed < 0 else params.seed
+            
+            # Generate
+            result = model.image_to_video(
+                image=image,
+                prompt=params.prompt,
+                negative_prompt=params.negative_prompt,
+                num_frames=int(params.duration_seconds * params.fps),
+                num_inference_steps=params.num_inference_steps,
+                guidance_scale=params.guidance_scale,
+                fps=params.fps,
+                seed=seed,
+                progress_callback=progress_callback
+            )
+            
+            info = {
+                "model": self.current_model_type.value,
+                "mode": "image_to_video",
+                "duration": result.duration,
+                "fps": result.fps,
+                "resolution": f"{result.resolution[0]}x{result.resolution[1]}",
+                "frames": len(result.frames),
+                "seed": result.metadata.get("seed", seed)
+            }
+            
+            return result.frames, info
+            
+        else:
+            # Legacy I2V support
+            return None, {"error": "Image-to-video not supported for legacy models"}
             
     def save_video(
         self,
@@ -694,3 +964,73 @@ class VideoGenerator:
             height=base_settings.get("height", 512),
             num_inference_steps=base_settings.get("steps", 30)
         )
+        
+    def get_model_features(self, model_type: VideoModel) -> Dict[str, bool]:
+        """Get supported features for a model"""
+        
+        if model_type in self.video_models:
+            model = self.video_models[model_type]
+            features = {
+                "text_to_video": model.supports_feature("text_to_video"),
+                "image_to_video": model.supports_feature("image_to_video"),
+                "video_to_video": model.supports_feature("video_to_video"),
+                "lora": model.supports_feature("lora"),
+                "controlnet": model.supports_feature("controlnet"),
+                "frame_interpolation": model.supports_feature("frame_interpolation"),
+                "real_time": model.supports_feature("real_time"),
+                "30fps": model.supports_feature("30fps"),
+                "4k": model.supports_feature("4k")
+            }
+            return features
+        else:
+            # Default features for legacy models
+            return {
+                "text_to_video": True,
+                "image_to_video": model_type == VideoModel.COGVIDEOX_5B,
+                "video_to_video": False,
+                "lora": False,
+                "controlnet": False,
+                "frame_interpolation": False,
+                "real_time": model_type == VideoModel.LTXVIDEO,
+                "30fps": model_type in [VideoModel.LTXVIDEO, VideoModel.MOCHI_PREVIEW],
+                "4k": False
+            }
+            
+    def profile_memory_usage(self) -> MemoryProfile:
+        """Profile current memory usage"""
+        return self.memory_optimizer.profile_system()
+        
+    def optimize_for_memory(
+        self,
+        target_memory_gb: float,
+        model_type: Optional[VideoModel] = None
+    ) -> Dict[str, Any]:
+        """Optimize model for target memory usage"""
+        
+        if model_type is None:
+            model_type = self.current_model_type
+            
+        if model_type and model_type in self.video_models:
+            model = self.video_models[model_type]
+            return self.memory_optimizer.optimize_model(
+                model,
+                target_memory_gb=target_memory_gb
+            )
+        else:
+            return {"error": "No model loaded or model not supported"}
+            
+    def enable_lora(
+        self,
+        lora_name: str,
+        lora_path: str,
+        alpha: float = 1.0
+    ) -> bool:
+        """Enable LoRA adapter for current model"""
+        
+        if self.current_model_type in self.video_models:
+            model = self.video_models[self.current_model_type]
+            
+            if hasattr(model, 'add_lora'):
+                return model.add_lora(lora_name, lora_path, alpha)
+                
+        return False

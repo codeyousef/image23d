@@ -316,3 +316,85 @@ QUALITY_PRESETS = {
         texture_resolution=8192
     )
 }
+
+# --- Video Models ---
+VIDEO_MODELS = {
+    "LTX-Video": {
+        "name": "LTX Video",
+        "repo_id": "Lightricks/LTX-Video",
+        "pipeline_class": "LTXVideoPipeline",
+        "size": "~10 GB",
+        "vram_required": "12GB+",
+        "description": "Text-to-video generation model"
+    }
+}
+
+# --- Texture Pipeline Components ---
+TEXTURE_PIPELINE_COMPONENTS = {
+    "unet": {
+        "name": "UNet Model",
+        "repo_id": "stabilityai/stable-diffusion-2-1",
+        "subfolder": "unet",
+        "description": "UNet for texture generation"
+    },
+    "vae": {
+        "name": "VAE Model",
+        "repo_id": "stabilityai/stable-diffusion-2-1",
+        "subfolder": "vae",
+        "description": "VAE for texture generation"
+    },
+    "text_encoder": {
+        "name": "Text Encoder",
+        "repo_id": "stabilityai/stable-diffusion-2-1",
+        "subfolder": "text_encoder",
+        "description": "Text encoder for texture generation"
+    },
+    "tokenizer": {
+        "name": "Tokenizer",
+        "repo_id": "stabilityai/stable-diffusion-2-1",
+        "subfolder": "tokenizer",
+        "description": "Tokenizer for texture generation"
+    }
+}
+
+# --- IP Adapter Models ---
+IP_ADAPTER_MODELS = {
+    "ip-adapter-plus": {
+        "name": "IP-Adapter Plus",
+        "repo_id": "h94/IP-Adapter",
+        "file": "models/ip-adapter-plus_sd15.bin",
+        "description": "IP-Adapter for style transfer"
+    },
+    "ip-adapter-plus-face": {
+        "name": "IP-Adapter Plus Face",
+        "repo_id": "h94/IP-Adapter",
+        "file": "models/ip-adapter-plus-face_sd15.bin",
+        "description": "IP-Adapter for face style transfer"
+    }
+}
+
+# --- Face Swap Models ---
+FACE_SWAP_MODELS = {
+    "inswapper_128": {
+        "name": "Inswapper 128",
+        "repo_id": "deepinsight/inswapper",
+        "file": "inswapper_128.onnx",
+        "description": "Face swapping model"
+    }
+}
+
+# --- Face Restore Models ---
+FACE_RESTORE_MODELS = {
+    "gfpgan": {
+        "name": "GFPGAN v1.4",
+        "repo_id": "tencentarc/GFPGAN",
+        "file": "GFPGANv1.4.pth",
+        "description": "Face restoration model"
+    },
+    "codeformer": {
+        "name": "CodeFormer",
+        "repo_id": "sczhou/CodeFormer",
+        "file": "codeformer.pth",
+        "description": "Advanced face restoration"
+    }
+}

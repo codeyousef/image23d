@@ -4,11 +4,30 @@ This version works without complex async initialization
 """
 
 import sys
+import os
 from pathlib import Path
 from nicegui import ui, app
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent))
+def setup_python_path():
+    """Setup Python path for imports"""
+    # Get current directory and ensure we're working from the right place
+    current_dir = Path(__file__).parent.resolve()
+    os.chdir(current_dir)
+    
+    # Add current directory to path
+    current_dir_str = str(current_dir)
+    if current_dir_str not in sys.path:
+        sys.path.insert(0, current_dir_str)
+    
+    # Add src directory to path for HunYuan3D imports
+    src_path = current_dir / "src"
+    if src_path.exists():
+        src_path_str = str(src_path)
+        if src_path_str not in sys.path:
+            sys.path.insert(0, src_path_str)
+
+# Setup path before any other imports
+setup_python_path()
 
 from desktop.ui import apply_theme
 from desktop.ui.components import NavigationSidebar
@@ -134,9 +153,10 @@ def main_page():
 
 if __name__ == '__main__':
     # Run the app
+    print("🚀 Starting NeuralForge Studio Desktop App...")
     ui.run(
         title='NeuralForge Studio',
-        native=True,
+        native=True,  # Desktop mode as originally intended
         window_size=(1400, 900),
         dark=True,
         reload=False,

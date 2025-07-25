@@ -10,6 +10,7 @@ Implements the processing steps defined in the 3D Implementation Guide:
 
 import logging
 from typing import List, Dict, Optional, Tuple, Any
+from io import BytesIO
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -571,9 +572,111 @@ class IntermediateOutputHandler:
         paths = []
         for i, img in enumerate(images):
             path = self.output_dir / f"{prefix}_{i:03d}.png"
-            img.save(path)
+            
+            # Handle different image types
+            if hasattr(img, 'save'):
+                # PIL Image
+                img.save(path)
+            elif isinstance(img, np.ndarray):
+                # NumPy array - convert to PIL
+                if img.dtype != np.uint8:
+                    # Normalize to 0-255 if needed
+                    if img.max() <= 1.0:
+                        img = (img * 255).astype(np.uint8)
+                    else:
+                        img = img.astype(np.uint8)
+                Image.fromarray(img).save(path)
+            elif isinstance(img, torch.Tensor):
+                # PyTorch tensor - convert to PIL
+                img_np = img.detach().cpu().numpy()
+                if img_np.ndim == 3 and img_np.shape[0] in [1, 3, 4]:
+                    # CHW format - convert to HWC
+                    img_np = np.transpose(img_np, (1, 2, 0))
+                if img_np.ndim == 3 and img_np.shape[2] == 1:
+                    # Single channel - squeeze
+                    img_np = img_np.squeeze(2)
+                # Normalize to 0-255
+                if img_np.max() <= 1.0:
+                    img_np = (img_np * 255).astype(np.uint8)
+                else:
+                    img_np = img_np.astype(np.uint8)
+                Image.fromarray(img_np).save(path)
+            elif hasattr(img, 'vertices') and hasattr(img, 'faces'):
+                # Trimesh object - render it to an image
+                logger.warning(f"Received Trimesh object instead of image. Attempting to render...")
+                try:
+                    # Try to render the mesh to an image
+                    # This is a temporary fix - the proper solution is to use the correct pipeline
+                    
+                    # Create a scene with the mesh
+                    scene = img.scene()
+                    
+                    # Set camera position for a good view
+                    # Get mesh bounds for proper camera positioning
+                    bounds = img.bounds
+                    center = img.centroid
+                    scale = (bounds[1] - bounds[0]).max()
+                    
+                    # Position camera to view the mesh
+                    camera_distance = scale * 2.5
+                    camera_pos = center + np.array([camera_distance, camera_distance, camera_distance])
+                    
+                    # Set camera transform to look at the mesh
+                    scene.set_camera(center=center, distance=camera_distance)
+                    
+                    # Render with higher resolution
+                    resolution = (512, 512)
+                    try:
+                        # Try using pyrender if available
+                        rendered = scene.save_image(resolution=resolution, visible=False)
+                        
+                        # Check if rendered is bytes (PNG data)
+                        if isinstance(rendered, bytes):
+                            # Decode PNG bytes to numpy array
+                            rendered_img = Image.open(BytesIO(rendered))
+                            rendered = np.array(rendered_img)
+                            logger.debug("Decoded PNG bytes to numpy array")
+                    except Exception as e:
+                        # Fallback: save as a simple wireframe representation
+                        logger.warning(f"Advanced rendering failed: {e}, creating simple representation")
+                        rendered = np.ones((512, 512, 3), dtype=np.uint8) * 128  # Gray background
+                    
+                    if rendered is not None and hasattr(rendered, 'shape') and len(rendered.shape) >= 2:
+                        # Convert to PIL Image
+                        if len(rendered.shape) == 3:
+                            rendered_img = Image.fromarray(rendered.astype(np.uint8))
+                        else:
+                            # Convert grayscale to RGB
+                            rendered_rgb = np.stack([rendered] * 3, axis=-1)
+                            rendered_img = Image.fromarray(rendered_rgb.astype(np.uint8))
+                        rendered_img.save(path)
+                        logger.info(f"Successfully rendered Trimesh to image: {path}")
+                    else:
+                        logger.error(f"Failed to render Trimesh object - no image data")
+                        continue
+                except Exception as e:
+                    logger.error(f"Failed to render Trimesh object: {e}")
+                    # Create a placeholder image indicating this was a 3D mesh
+                    try:
+                        from PIL import ImageDraw, ImageFont
+                        placeholder = Image.new('RGB', (512, 512), color='lightgray')
+                        draw = ImageDraw.Draw(placeholder)
+                        text = f"3D Mesh\n{img.vertices.shape[0]} vertices\n{img.faces.shape[0]} faces"
+                        draw.text((256, 256), text, fill='black', anchor='mm')
+                        placeholder.save(path)
+                        logger.info(f"Created placeholder image for Trimesh: {path}")
+                    except Exception as e2:
+                        logger.error(f"Failed to create placeholder image: {e2}")
+                        continue
+            else:
+                logger.error(f"Unknown image type: {type(img)}. Expected PIL Image, numpy array, torch tensor, or Trimesh object.")
+                # Try to convert to string representation for debugging
+                logger.debug(f"Image object: {img}")
+                continue
+                
             paths.append(str(path))
-        logger.debug(f"Saved {len(images)} multi-view images to {self.output_dir}")
+            
+        logger.debug(f"Saved {len(paths)} multi-view images to {self.output_dir}")
         return paths
         
     def save_depth_maps(self, depth_maps: List[np.ndarray], prefix: str = "depth") -> List[str]:

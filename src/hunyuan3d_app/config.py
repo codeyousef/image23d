@@ -68,20 +68,73 @@ FLUX_COMPONENTS = {
     }
 }
 
-# Video Model Configurations
+# Video Model Configurations (Enhanced with new models)
 VIDEO_MODELS = {
+    # New state-of-the-art models
+    "wan2_1_1.3b": {
+        "name": "Wan2.1 1.3B",
+        "repo_id": "Wan-AI/Wan2.1-T2V-1.3B",
+        "size": "~2.6 GB",
+        "vram_required": "8GB+",
+        "description": "Consumer GPU friendly with visual text generation",
+        "max_frames": 129,
+        "fps": 24,
+        "features": ["visual_text", "multilingual", "flow_matching"]
+    },
+    "wan2_1_14b": {
+        "name": "Wan2.1 14B",
+        "repo_id": "Wan-AI/Wan2.1-T2V-14B",
+        "size": "~28 GB",
+        "vram_required": "16GB+",
+        "description": "Professional quality with 1080p support",
+        "max_frames": 129,
+        "fps": 24,
+        "features": ["visual_text", "multilingual", "1080p", "flow_matching"]
+    },
     "hunyuanvideo": {
         "name": "HunyuanVideo",
         "repo_id": "tencent/HunyuanVideo",
         "model_file": "hunyuanvideo_diffusion_pytorch_model.safetensors",
         "size": "~50 GB",
         "vram_required": "24GB+",
-        "description": "High-quality text-to-video generation",
+        "description": "Cinema-quality with dual-stream architecture",
         "max_frames": 129,
-        "fps": 24
+        "fps": 24,
+        "features": ["dual_stream", "llama_encoder", "30fps", "cinema_quality"]
     },
+    "ltxvideo": {
+        "name": "LTX-Video",
+        "repo_id": "Lightricks/LTX-Video",
+        "size": "~8 GB",
+        "vram_required": "12GB+",
+        "description": "Real-time generation (4s for 5s video)",
+        "max_frames": 121,
+        "fps": 30,
+        "features": ["real_time", "high_resolution", "artifact_reduction"]
+    },
+    "mochi_1": {
+        "name": "Mochi-1",
+        "repo_id": "genmo/mochi-1-preview",
+        "size": "~25 GB",
+        "vram_required": "24GB+",
+        "description": "10B model with smooth 30fps motion",
+        "max_frames": 163,
+        "fps": 30,
+        "features": ["asymmetric_dit", "128x_compression", "smooth_motion"]
+    },
+    "cogvideox_5b": {
+        "name": "CogVideoX-5B",
+        "repo_id": "THUDM/CogVideoX-5b",
+        "size": "~16 GB",
+        "vram_required": "16GB+",
+        "description": "Superior image-to-video specialist",
+        "max_frames": 49,
+        "fps": 8,
+        "features": ["i2v_specialist", "lora_support", "interpolation"]
+    },
+    # Legacy models for compatibility
     "cogvideox": {
-        "name": "CogVideoX",
+        "name": "CogVideoX-2B",
         "repo_id": "THUDM/CogVideoX-2b",
         "size": "~10 GB",
         "vram_required": "12GB+",
@@ -152,6 +205,26 @@ TEXTURE_COMPONENTS = {
 FLUX_MODELS = {
     **IMAGE_MODELS,
     **GGUF_IMAGE_MODELS
+}
+
+# Video model categories for easy access
+STATE_OF_THE_ART_VIDEO_MODELS = {
+    "wan2_1_1.3b": VIDEO_MODELS["wan2_1_1.3b"],
+    "wan2_1_14b": VIDEO_MODELS["wan2_1_14b"],
+    "hunyuanvideo": VIDEO_MODELS["hunyuanvideo"],
+    "ltxvideo": VIDEO_MODELS["ltxvideo"],
+    "mochi_1": VIDEO_MODELS["mochi_1"],
+    "cogvideox_5b": VIDEO_MODELS["cogvideox_5b"]
+}
+
+CONSUMER_GPU_VIDEO_MODELS = {
+    k: v for k, v in VIDEO_MODELS.items() 
+    if "8GB" in v.get("vram_required", "") or "12GB" in v.get("vram_required", "")
+}
+
+PROFESSIONAL_VIDEO_MODELS = {
+    k: v for k, v in VIDEO_MODELS.items() 
+    if "16GB" in v.get("vram_required", "") or "24GB" in v.get("vram_required", "")
 }
 
 # For backward compatibility with desktop app

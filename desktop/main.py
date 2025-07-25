@@ -9,10 +9,14 @@ import asyncio
 import signal
 import atexit
 from pathlib import Path
-from nicegui import ui, app, native
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Setup paths BEFORE any imports
+current_file = Path(__file__).resolve()
+project_root = current_file.parent.parent
+sys.path.insert(0, str(project_root))
+sys.path.insert(0, str(project_root / "src"))
+
+from nicegui import ui, app, native
 
 from core.services import ModelManager
 from core.config import MODELS_DIR, OUTPUT_DIR
@@ -151,7 +155,7 @@ def main():
     try:
         ui.run(
             title='NeuralForge Studio',
-            native=True,
+            native=False,  # Run in browser mode
             window_size=(1400, 900),
             dark=True,
             reload=False,

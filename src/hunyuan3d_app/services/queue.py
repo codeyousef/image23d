@@ -392,16 +392,17 @@ class QueueManager:
         Returns:
             True if cancelled, False if not found or already running
         """
-        job = self.jobs.get(job_id)
-        if not job:
-            return False
-            
-        if job.status == JobStatus.PENDING:
-            job.status = JobStatus.CANCELLED
-            job.completed_at = time.time()
-            self._save_job_history(job)
-            logger.info(f"Cancelled job {job_id}")
-            return True
+        with self.jobs_lock:
+            job = self.jobs.get(job_id)
+            if not job:
+                return False
+                
+            if job.status == JobStatus.PENDING:
+                job.status = JobStatus.CANCELLED
+                job.completed_at = time.time()
+                self._save_job_history(job)
+                logger.info(f"Cancelled job {job_id}")
+                return True
             
         return False
         
@@ -409,12 +410,13 @@ class QueueManager:
         """Clear completed and failed jobs from memory"""
         to_remove = []
         
-        for job_id, job in self.jobs.items():
-            if job.status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
-                to_remove.append(job_id)
-                
-        for job_id in to_remove:
-            del self.jobs[job_id]
+        with self.jobs_lock:
+            for job_id, job in self.jobs.items():
+                if job.status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
+                    to_remove.append(job_id)
+                    
+            for job_id in to_remove:
+                del self.jobs[job_id]
             
         logger.info(f"Cleared {len(to_remove)} completed jobs")
         
