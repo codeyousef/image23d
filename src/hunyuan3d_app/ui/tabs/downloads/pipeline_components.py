@@ -12,7 +12,7 @@ def check_texture_components_status() -> tuple:
     """Check if texture components are installed
     
     Returns:
-        Tuple of (realesrgan_installed, xatlas_installed)
+        Tuple of (realesrgan_installed, xatlas_installed, dinov2_installed)
     """
     realesrgan_installed = (Path("Hunyuan3D") / "hy3dpaint" / "ckpt" / "RealESRGAN_x4plus.pth").exists()
     
@@ -22,18 +22,35 @@ def check_texture_components_status() -> tuple:
     except ImportError:
         xatlas_installed = False
     
-    return realesrgan_installed, xatlas_installed
+    # Check if DINOv2 is in cache
+    cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+    dinov2_installed = any(
+        d.name.startswith("models--facebook--dinov2-giant") 
+        for d in cache_dir.iterdir() 
+        if d.is_dir()
+    ) if cache_dir.exists() else False
+    
+    return realesrgan_installed, xatlas_installed, dinov2_installed
 
 
 def create_texture_warning_banner() -> gr.Markdown:
     """Create warning banner for missing texture components"""
-    realesrgan_installed, xatlas_installed = check_texture_components_status()
+    realesrgan_installed, xatlas_installed, dinov2_installed = check_texture_components_status()
     
-    if not realesrgan_installed or not xatlas_installed:
-        return gr.Markdown("""
+    if not realesrgan_installed or not xatlas_installed or not dinov2_installed:
+        missing_components = []
+        if not realesrgan_installed:
+            missing_components.append("RealESRGAN")
+        if not xatlas_installed:
+            missing_components.append("xatlas")
+        if not dinov2_installed:
+            missing_components.append("DINOv2")
+            
+        return gr.Markdown(f"""
         <div style="background: #fef3c7; border: 2px solid #f59e0b; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
             <h4 style="margin-top: 0; color: #d97706;">⚠️ Texture Components Missing!</h4>
-            <p style="margin-bottom: 8px;">Essential texture pipeline components are not installed. Your 3D models will generate without textures.</p>
+            <p style="margin-bottom: 8px;">Essential texture pipeline components are not installed: {', '.join(missing_components)}</p>
+            <p style="margin-bottom: 8px;">Your 3D models will generate with reduced texture quality.</p>
             <p style="margin-bottom: 0;"><strong>Quick Fix:</strong> Click the <strong>"🎨 Download Texture Components"</strong> button below, or go to the <strong>"🎨 Texture Pipeline Components"</strong> tab.</p>
         </div>
         """)
@@ -85,6 +102,17 @@ def create_texture_component_card(app, comp_name: str, comp_info: Dict[str, Any]
         # Check if downloaded
         if comp_name == "realesrgan":
             is_downloaded = (Path("Hunyuan3D") / "hy3dpaint" / "ckpt" / "RealESRGAN_x4plus.pth").exists()
+        elif comp_name == "dinov2":
+            # Check if DINOv2 model is in HuggingFace cache
+            from pathlib import Path
+            import os
+            cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+            # Look for facebook--dinov2-giant in cache
+            is_downloaded = any(
+                d.name.startswith("models--facebook--dinov2-giant") 
+                for d in cache_dir.iterdir() 
+                if d.is_dir()
+            ) if cache_dir.exists() else False
         else:
             is_downloaded = False
             

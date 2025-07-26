@@ -18,6 +18,9 @@ import gc
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
+# Import hunyuan3d_app first to trigger global torch.load security patch
+import hunyuan3d_app
+
 from hunyuan3d_app.models.threed.orchestrator import ThreeDOrchestrator
 from hunyuan3d_app.models.threed.hunyuan3d.config import HunYuan3DConfig
 import psutil

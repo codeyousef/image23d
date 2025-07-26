@@ -331,29 +331,31 @@ VIDEO_MODELS = {
 
 # --- Texture Pipeline Components ---
 TEXTURE_PIPELINE_COMPONENTS = {
-    "unet": {
-        "name": "UNet Model",
-        "repo_id": "stabilityai/stable-diffusion-2-1",
-        "subfolder": "unet",
-        "description": "UNet for texture generation"
+    "realesrgan": {
+        "name": "RealESRGAN 4x Plus",
+        "type": "model",
+        "repo_id": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
+        "size": "~64 MB",
+        "description": "AI upscaler for enhancing texture quality and resolution",
+        "required_for": "High-quality texture generation in HunYuan3D",
+        "download_url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
     },
-    "vae": {
-        "name": "VAE Model",
-        "repo_id": "stabilityai/stable-diffusion-2-1",
-        "subfolder": "vae",
-        "description": "VAE for texture generation"
+    "xatlas": {
+        "name": "xatlas",
+        "type": "dependency",
+        "pip_package": "xatlas",
+        "size": "~5 MB",
+        "description": "UV unwrapping library for proper texture mapping on 3D meshes",
+        "required_for": "Texture UV coordinate generation"
     },
-    "text_encoder": {
-        "name": "Text Encoder",
-        "repo_id": "stabilityai/stable-diffusion-2-1",
-        "subfolder": "text_encoder",
-        "description": "Text encoder for texture generation"
-    },
-    "tokenizer": {
-        "name": "Tokenizer",
-        "repo_id": "stabilityai/stable-diffusion-2-1",
-        "subfolder": "tokenizer",
-        "description": "Tokenizer for texture generation"
+    "dinov2": {
+        "name": "DINOv2 Giant",
+        "type": "model",
+        "repo_id": "facebook/dinov2-giant",
+        "size": "~4.4 GB",
+        "description": "Vision transformer for advanced texture feature extraction",
+        "required_for": "Enhanced texture quality in HunYuan3D 2.1",
+        "download_url": "facebook/dinov2-giant"
     }
 }
 

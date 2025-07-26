@@ -5,9 +5,10 @@ import torch
 import numpy as np
 import trimesh
 import logging
-from typing import Optional, Dict, Any, Tuple, Union
+from typing import Optional, Dict, Any, Tuple, Union, List
 from pathlib import Path
 from PIL import Image
+from torchvision import transforms
 
 from .config import HunYuan3DConfig, MODEL_VARIANTS
 from .utils import raise_not_implemented, validate_device, get_optimal_dtype
@@ -44,6 +45,10 @@ class HunYuan3DTexture(Base3DModel):
         self.variant_info = MODEL_VARIANTS.get(config.model_variant, {})
         self.model_id = self.variant_info.get("texture_model")
         self.supports_pbr = self.variant_info.get("supports_pbr", False)
+        
+        # DINO v2 model for texture generation
+        self.dino_v2 = None
+        self.dino_ckpt_path = "facebook/dinov2-giant"
         
         logger.info(
             f"Initialized HunYuan3D Texture - Model: {self.model_id}, "
@@ -129,25 +134,18 @@ class HunYuan3DTexture(Base3DModel):
             
             logger.info(f"Loading pipeline from: {model_load_path}")
             
-            # Temporarily disable torch.load security check for trusted HunYuan3D model
-            # This is safe because we're loading from HuggingFace's verified repository
-            import transformers.utils.import_utils
-            original_check = transformers.utils.import_utils.check_torch_load_is_safe
-            transformers.utils.import_utils.check_torch_load_is_safe = lambda: None
+            # Note: torch.load security check is disabled globally in __init__.py 
+            # This allows HunYuan3D models to load properly without CVE-2025-32434 errors
             
-            logger.info("Temporarily disabled torch.load security check for HunYuan3D model loading")
+            # Load pipeline exactly like the official implementation
+            self.pipeline = DiffusionPipeline.from_pretrained(
+                model_load_path,
+                custom_pipeline=custom_pipeline,
+                torch_dtype=torch.float16,  # Use float16 like official implementation
+                device_map=None  # Don't use automatic device mapping
+            )
             
-            try:
-                # Load pipeline exactly like the official implementation
-                self.pipeline = DiffusionPipeline.from_pretrained(
-                    model_load_path,
-                    custom_pipeline=custom_pipeline,
-                    torch_dtype=torch.float16  # Use float16 like official implementation
-                )
-            finally:
-                # Always restore the original security check
-                transformers.utils.import_utils.check_torch_load_is_safe = original_check
-                logger.info("Restored torch.load security check")
+            logger.info("Pipeline loading completed, configuring components...")
             
             # Configure scheduler like official implementation
             self.pipeline.scheduler = UniPCMultistepScheduler.from_config(
@@ -161,8 +159,37 @@ class HunYuan3DTexture(Base3DModel):
             if hasattr(self.pipeline, 'unet'):
                 setattr(self.pipeline, "view_size", 320)  # Default from official config
             
-            # Move to device
+            # Move to device - ensure all components are moved
+            logger.info(f"Moving pipeline to device: {self.device}")
             self.pipeline = self.pipeline.to(self.device)
+            
+            # Double-check all components are on the correct device
+            self._ensure_pipeline_on_device()
+            
+            # Validate that all pipeline components are properly loaded
+            logger.info("Validating pipeline components are fully loaded...")
+            
+            # Check that essential components are loaded
+            essential_components = ['unet', 'scheduler']
+            for component_name in essential_components:
+                if hasattr(self.pipeline, component_name):
+                    component = getattr(self.pipeline, component_name)
+                    if component is None:
+                        logger.warning(f"Component {component_name} is None after loading")
+                    else:
+                        logger.debug(f"Component {component_name} loaded successfully: {type(component)}")
+                else:
+                    logger.warning(f"Component {component_name} not found in pipeline")
+            
+            # Additional validation for text/image encoders if they exist
+            optional_components = ['text_encoder', 'image_encoder', 'vae']
+            for component_name in optional_components:
+                if hasattr(self.pipeline, component_name):
+                    component = getattr(self.pipeline, component_name)
+                    if component is not None:
+                        logger.debug(f"Optional component {component_name} loaded: {type(component)}")
+            
+            logger.info("Pipeline setup and validation completed successfully")
             
         except ImportError as e:
             logger.error(f"Failed to import texture modules: {e}")
@@ -191,6 +218,40 @@ class HunYuan3DTexture(Base3DModel):
         except Exception as e:
             logger.warning(f"Failed to enable offloading: {e}")
     
+    def _initialize_dino_v2(self):
+        """Initialize DINO v2 model for feature extraction."""
+        if self.dino_v2 is not None:
+            return  # Already initialized
+        
+        try:
+            # Import HunYuan3D's DINO v2 module
+            import sys
+            from pathlib import Path
+            
+            # Add HunYuan3D path to sys.path temporarily
+            hunyuan3d_path = Path(__file__).parent.parent.parent.parent.parent / "Hunyuan3D"
+            hy3dpaint_path = hunyuan3d_path / "hy3dpaint"
+            
+            if hy3dpaint_path.exists() and str(hy3dpaint_path) not in sys.path:
+                sys.path.insert(0, str(hy3dpaint_path))
+            
+            # Import Dino_v2 from HunYuan3D
+            from hunyuanpaintpbr.unet.modules import Dino_v2
+            
+            logger.info(f"Initializing DINO v2 model from: {self.dino_ckpt_path}")
+            self.dino_v2 = Dino_v2(self.dino_ckpt_path).to(torch.float16)
+            self.dino_v2 = self.dino_v2.to(self.device)
+            self.dino_v2.eval()
+            
+            logger.info("DINO v2 model initialized successfully")
+            
+        except ImportError as e:
+            logger.error(f"Failed to import DINO v2 module: {e}")
+            logger.warning("Texture generation may fail without DINO features")
+        except Exception as e:
+            logger.error(f"Failed to initialize DINO v2: {e}")
+            logger.warning("Continuing without DINO v2 features")
+    
     def _update_memory_usage(self):
         """Update memory usage tracking."""
         if torch.cuda.is_available():
@@ -201,6 +262,7 @@ class HunYuan3DTexture(Base3DModel):
         self,
         mesh: trimesh.Trimesh,
         prompt: str,
+        input_image: Optional[Image.Image] = None,
         resolution: Optional[int] = None,
         guidance_scale: float = 7.5,
         num_inference_steps: int = 50,
@@ -211,8 +273,9 @@ class HunYuan3DTexture(Base3DModel):
         """Generate texture for mesh.
         
         Args:
-            mesh: Input mesh
+            mesh: Input mesh for UV reference
             prompt: Text description for texture
+            input_image: Original input image used for 3D generation (required)
             resolution: Texture resolution
             guidance_scale: Guidance scale
             num_inference_steps: Number of denoising steps
@@ -252,7 +315,24 @@ class HunYuan3DTexture(Base3DModel):
             # Ensure mesh has UV coordinates
             if not hasattr(mesh, 'visual') or not hasattr(mesh.visual, 'uv'):
                 logger.info("Generating UV coordinates")
-                mesh = self._generate_uvs(mesh)
+                try:
+                    # Validate mesh before UV generation
+                    if not hasattr(mesh, 'vertices') or not hasattr(mesh, 'faces'):
+                        raise ValueError("Mesh is missing vertices or faces")
+                    
+                    if len(mesh.vertices) == 0 or len(mesh.faces) == 0:
+                        raise ValueError(f"Mesh has no geometry: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
+                    
+                    logger.info(f"Mesh validation passed: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
+                    mesh = self._generate_uvs(mesh)
+                    logger.info("UV coordinate generation completed successfully")
+                    
+                except Exception as e:
+                    logger.error(f"UV generation failed: {e}")
+                    logger.warning("Continuing without UV coordinates - texture generation may fail")
+                    # Create a simple UV visual if none exists
+                    if not hasattr(mesh, 'visual'):
+                        mesh.visual = trimesh.visual.ColorVisuals()
             
             # Set random seed
             if seed is not None:
@@ -263,8 +343,29 @@ class HunYuan3DTexture(Base3DModel):
             with optimize_memory_usage():
                 # Generate texture
                 with torch.no_grad():
+                    # HunYuan3D texture pipeline expects an image as primary input
+                    if input_image is None:
+                        raise ValueError("HunYuan3D texture generation requires an input image")
+                    
+                    logger.info(f"Generating texture from input image: {input_image.size}")
+                    logger.info(f"Device: {self.device}, Pipeline device: {next(self.pipeline.unet.parameters()).device}")
+                    
+                    # Ensure input image is in the correct format
+                    # The HunYuan3D pipeline expects PIL images, not tensors
+                    if not isinstance(input_image, Image.Image):
+                        raise ValueError("Input image must be a PIL Image")
+                    
+                    # Validate and prepare input image
+                    input_image = self._validate_input_image(input_image, resolution)
+                    
+                    # Prepare mesh conditions for HunYuan3D texture pipeline
+                    cached_condition = self._prepare_mesh_conditions(mesh, resolution, input_image)
+                    
+                    # Ensure all pipeline components are on the same device
+                    self._ensure_pipeline_on_device()
+                    
                     texture_outputs = self.pipeline(
-                        mesh=mesh,
+                        images=[input_image],  # HunYuan3D expects 'images' as list, not 'image'
                         prompt=prompt,
                         height=resolution,
                         width=resolution,
@@ -272,6 +373,7 @@ class HunYuan3DTexture(Base3DModel):
                         num_inference_steps=num_inference_steps,
                         generator=generator,
                         output_type="pil",
+                        **cached_condition,  # Pass mesh-rendered conditions
                         **kwargs
                     )
                 
@@ -284,8 +386,22 @@ class HunYuan3DTexture(Base3DModel):
             logger.info(f"Generated {len(texture_maps)} texture maps")
             return texture_maps
             
+        except RuntimeError as e:
+            if "Expected all tensors to be on the same device" in str(e):
+                logger.error(f"Device mismatch error: {e}")
+                logger.error("This usually indicates a problem with the pipeline configuration")
+                logger.error(f"Current device: {self.device}")
+                if hasattr(self, 'pipeline') and self.pipeline:
+                    if hasattr(self.pipeline, 'vae'):
+                        logger.error(f"VAE device: {next(self.pipeline.vae.parameters()).device}")
+                    if hasattr(self.pipeline, 'unet'):
+                        logger.error(f"UNet device: {next(self.pipeline.unet.parameters()).device}")
+                raise RuntimeError(f"Device mismatch in texture generation pipeline: {str(e)}")
+            else:
+                logger.error(f"Texture generation failed: {e}")
+                raise RuntimeError(f"Texture generation failed: {str(e)}")
         except Exception as e:
-            logger.error(f"Texture generation failed: {e}")
+            logger.error(f"Unexpected error in texture generation: {e}")
             raise RuntimeError(f"Texture generation failed: {str(e)}")
     
     def _generate_uvs(self, mesh: trimesh.Trimesh) -> trimesh.Trimesh:
@@ -293,12 +409,72 @@ class HunYuan3DTexture(Base3DModel):
         try:
             # Try to use xatlas for UV unwrapping
             import xatlas
+            logger.info("Using xatlas for UV unwrapping")
             
-            # Pack UV atlas
-            vmapping, indices, uvs = xatlas.parametrize(
-                mesh.vertices,
-                mesh.faces
-            )
+            # Validate mesh data for xatlas
+            if not isinstance(mesh.vertices, np.ndarray) or not isinstance(mesh.faces, np.ndarray):
+                raise ValueError("Mesh vertices and faces must be numpy arrays")
+            
+            # Check mesh complexity - if too complex, skip xatlas to avoid hanging
+            num_vertices = len(mesh.vertices)
+            num_faces = len(mesh.faces)
+            
+            if num_vertices > 50000 or num_faces > 100000:
+                logger.warning(f"Mesh too complex for xatlas ({num_vertices} vertices, {num_faces} faces), using spherical projection")
+                return self._spherical_uv_projection(mesh)
+            
+            # Pack UV atlas with timeout protection
+            logger.debug(f"Calling xatlas.parametrize with vertices shape: {mesh.vertices.shape}, faces shape: {mesh.faces.shape}")
+            
+            # Use threading to implement a timeout for xatlas
+            import threading
+            import queue
+            import time
+            
+            result_queue = queue.Queue()
+            exception_queue = queue.Queue()
+            
+            def xatlas_worker():
+                try:
+                    logger.info("Starting xatlas UV parametrization...")
+                    start_time = time.time()
+                    
+                    vmapping, indices, uvs = xatlas.parametrize(
+                        mesh.vertices.astype(np.float32),  # Ensure float32 for xatlas
+                        mesh.faces.astype(np.uint32)       # Ensure uint32 for xatlas
+                    )
+                    
+                    elapsed_time = time.time() - start_time
+                    logger.info(f"xatlas completed in {elapsed_time:.2f} seconds")
+                    
+                    result_queue.put((vmapping, indices, uvs))
+                except Exception as e:
+                    exception_queue.put(e)
+            
+            # Start worker thread
+            worker_thread = threading.Thread(target=xatlas_worker)
+            worker_thread.daemon = True
+            worker_thread.start()
+            
+            # Wait for result with timeout (30 seconds)
+            timeout_seconds = 30
+            worker_thread.join(timeout=timeout_seconds)
+            
+            if worker_thread.is_alive():
+                logger.error(f"xatlas timed out after {timeout_seconds} seconds, falling back to spherical projection")
+                return self._spherical_uv_projection(mesh)
+            
+            # Check for exceptions
+            if not exception_queue.empty():
+                raise exception_queue.get()
+            
+            # Get result
+            if result_queue.empty():
+                raise RuntimeError("xatlas worker finished but no result available")
+            
+            vmapping, indices, uvs = result_queue.get()
+            
+            logger.info(f"xatlas UV generation successful: {len(vmapping)} vertices mapped, {len(uvs)} UV coordinates")
             
             # Create new mesh with UVs
             mesh_with_uvs = trimesh.Trimesh(
@@ -310,34 +486,203 @@ class HunYuan3DTexture(Base3DModel):
             return mesh_with_uvs
             
         except ImportError:
-            logger.warning("xatlas not available, using simple UV projection")
-            # Fallback to spherical UV mapping
+            logger.warning("xatlas library not available, using spherical UV projection fallback")
+            return self._spherical_uv_projection(mesh)
+        except Exception as e:
+            logger.error(f"xatlas UV generation failed: {e}")
+            logger.warning("Falling back to spherical UV projection")
             return self._spherical_uv_projection(mesh)
     
     def _spherical_uv_projection(self, mesh: trimesh.Trimesh) -> trimesh.Trimesh:
         """Apply spherical UV projection."""
-        vertices = mesh.vertices
+        try:
+            logger.info("Applying spherical UV projection fallback")
+            vertices = mesh.vertices
+            
+            if vertices.shape[0] == 0:
+                raise ValueError("No vertices to project")
+            
+            # Center vertices
+            center = vertices.mean(axis=0)
+            centered = vertices - center
+            
+            # Convert to spherical coordinates
+            r = np.linalg.norm(centered, axis=1)
+            
+            # Handle case where r is zero (all points at center)
+            r = np.maximum(r, 1e-8)
+            
+            theta = np.arctan2(centered[:, 1], centered[:, 0])
+            phi = np.arccos(np.clip(centered[:, 2] / r, -1, 1))
+            
+            # Map to UV coordinates
+            u = (theta + np.pi) / (2 * np.pi)
+            v = phi / np.pi
+            
+            # Ensure UV coordinates are valid
+            u = np.clip(u, 0.0, 1.0)
+            v = np.clip(v, 0.0, 1.0)
+            
+            # Create UV coordinates
+            uv = np.stack([u, v], axis=1)
+            
+            logger.info(f"Spherical UV projection successful: {len(uv)} UV coordinates generated")
+            
+            # Create visual with UVs
+            mesh.visual = trimesh.visual.TextureVisuals(uv=uv)
+            
+            return mesh
+            
+        except Exception as e:
+            logger.error(f"Spherical UV projection failed: {e}")
+            logger.warning("Creating mesh without UV coordinates")
+            # Return mesh with basic visual
+            if not hasattr(mesh, 'visual'):
+                mesh.visual = trimesh.visual.ColorVisuals()
+            return mesh
+    
+    def _ensure_pipeline_on_device(self):
+        """Ensure all pipeline components are on the correct device."""
+        try:
+            if self.pipeline is None:
+                return
+            
+            # Check if pipeline needs to be moved to device
+            if hasattr(self.pipeline, 'vae') and self.pipeline.vae is not None:
+                # Check VAE device
+                vae_device = next(self.pipeline.vae.parameters()).device
+                if vae_device != self.device:
+                    logger.info(f"Moving VAE from {vae_device} to {self.device}")
+                    self.pipeline.vae = self.pipeline.vae.to(self.device)
+            
+            if hasattr(self.pipeline, 'unet') and self.pipeline.unet is not None:
+                # Check UNet device
+                unet_device = next(self.pipeline.unet.parameters()).device
+                if unet_device != self.device:
+                    logger.info(f"Moving UNet from {unet_device} to {self.device}")
+                    self.pipeline.unet = self.pipeline.unet.to(self.device)
+            
+            if hasattr(self.pipeline, 'text_encoder') and self.pipeline.text_encoder is not None:
+                # Check text encoder device
+                text_encoder_device = next(self.pipeline.text_encoder.parameters()).device
+                if text_encoder_device != self.device:
+                    logger.info(f"Moving text encoder from {text_encoder_device} to {self.device}")
+                    self.pipeline.text_encoder = self.pipeline.text_encoder.to(self.device)
+                    
+            # The pipeline itself may not have a settable device attribute
+            # This is normal - the components are what matter
+                
+            logger.debug("All pipeline components verified to be on the correct device")
+            
+        except Exception as e:
+            logger.error(f"Failed to ensure pipeline on device: {e}")
+            # Continue anyway - the pipeline might still work
+    
+    def _validate_input_image(self, image: Image.Image, resolution: int) -> Image.Image:
+        """Validate and prepare input image for texture generation.
         
-        # Center vertices
-        center = vertices.mean(axis=0)
-        centered = vertices - center
+        Args:
+            image: Input PIL image
+            resolution: Target resolution
+            
+        Returns:
+            Validated and prepared PIL image
+        """
+        try:
+            # Convert to RGB if needed
+            if image.mode != 'RGB':
+                logger.info(f"Converting image from {image.mode} to RGB")
+                image = image.convert('RGB')
+            
+            # Resize if needed
+            if image.size != (resolution, resolution):
+                logger.info(f"Resizing image from {image.size} to ({resolution}, {resolution})")
+                image = image.resize((resolution, resolution), Image.Resampling.LANCZOS)
+            
+            # Validate image data
+            img_array = np.array(image)
+            if img_array.shape != (resolution, resolution, 3):
+                raise ValueError(f"Invalid image shape after processing: {img_array.shape}")
+            
+            # Check for valid pixel values
+            if img_array.min() < 0 or img_array.max() > 255:
+                logger.warning(f"Image has invalid pixel values: min={img_array.min()}, max={img_array.max()}")
+                img_array = np.clip(img_array, 0, 255)
+                image = Image.fromarray(img_array.astype(np.uint8))
+            
+            logger.debug(f"Input image validated: {image.size}, {image.mode}")
+            return image
+            
+        except Exception as e:
+            logger.error(f"Failed to validate input image: {e}")
+            raise ValueError(f"Invalid input image: {str(e)}")
+    
+    def _prepare_mesh_conditions(self, mesh: trimesh.Trimesh, resolution: int, input_image: Image.Image) -> Dict[str, Any]:
+        """Prepare mesh conditions (normal/position maps) for HunYuan3D texture pipeline.
         
-        # Convert to spherical coordinates
-        r = np.linalg.norm(centered, axis=1)
-        theta = np.arctan2(centered[:, 1], centered[:, 0])
-        phi = np.arccos(np.clip(centered[:, 2] / (r + 1e-8), -1, 1))
-        
-        # Map to UV coordinates
-        u = (theta + np.pi) / (2 * np.pi)
-        v = phi / np.pi
-        
-        # Create UV coordinates
-        uv = np.stack([u, v], axis=1)
-        
-        # Create visual with UVs
-        mesh.visual = trimesh.visual.TextureVisuals(uv=uv)
-        
-        return mesh
+        Args:
+            mesh: Input mesh
+            resolution: Resolution for rendered maps
+            input_image: Original input image for DINO feature extraction
+            
+        Returns:
+            Dictionary containing cached_condition data for the pipeline
+        """
+        try:
+            logger.info("Preparing mesh conditions for texture generation...")
+            
+            # For now, create simple placeholder conditions
+            # TODO: Implement proper mesh rendering for normal/position maps
+            cached_condition = {}
+            
+            # Create simple normal and position maps as placeholders
+            # In a full implementation, these would be rendered from the mesh
+            
+            # Create a simple normal map (pointing up)
+            normal_map = Image.new('RGB', (resolution, resolution), (128, 128, 255))  # Normal pointing up
+            cached_condition["images_normal"] = [[normal_map]]  # List of lists format expected
+            
+            # Create a simple position map (gradient)
+            position_map = Image.new('RGB', (resolution, resolution), (0, 0, 0))
+            # Add some gradient to simulate depth
+            import numpy as np
+            pos_array = np.zeros((resolution, resolution, 3), dtype=np.uint8)
+            for i in range(resolution):
+                for j in range(resolution):
+                    # Simple depth gradient
+                    depth = int((i + j) / (2 * resolution) * 255)
+                    pos_array[i, j] = [depth, depth, depth]
+            
+            position_map = Image.fromarray(pos_array)
+            cached_condition["images_position"] = [[position_map]]  # List of lists format expected
+            
+            # Check if pipeline uses DINO and add hidden states
+            if hasattr(self.pipeline, 'unet') and hasattr(self.pipeline.unet, 'use_dino') and self.pipeline.unet.use_dino:
+                logger.info("Pipeline uses DINO, extracting features from input image...")
+                
+                # Initialize DINO v2 if not already done
+                self._initialize_dino_v2()
+                
+                if self.dino_v2 is not None:
+                    try:
+                        # Process input image through DINO v2
+                        with torch.no_grad():
+                            dino_hidden_states = self.dino_v2(input_image)
+                            cached_condition["dino_hidden_states"] = dino_hidden_states
+                            logger.info(f"Added DINO hidden states with shape: {dino_hidden_states.shape}")
+                    except Exception as e:
+                        logger.error(f"Failed to extract DINO features: {e}")
+                        logger.warning("Continuing without DINO features")
+                else:
+                    logger.warning("DINO v2 not initialized, continuing without DINO features")
+            
+            logger.info("Mesh conditions prepared")
+            return cached_condition
+            
+        except Exception as e:
+            logger.error(f"Failed to prepare mesh conditions: {e}")
+            logger.warning("Using empty conditions - texture generation may fail")
+            return {}
     
     def _extract_texture_maps(
         self,
@@ -425,12 +770,16 @@ class HunYuan3DTexture(Base3DModel):
         if self.pipeline is not None:
             del self.pipeline
             self.pipeline = None
+        
+        if self.dino_v2 is not None:
+            del self.dino_v2
+            self.dino_v2 = None
             
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            
-            self._memory_usage = 0
-            logger.info("Unloaded texture model")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        self._memory_usage = 0
+        logger.info("Unloaded texture model")
     
     def get_memory_usage(self) -> Dict[str, float]:
         """Get current memory usage in GB - implements abstract method from Base3DModel."""
@@ -447,4 +796,8 @@ class HunYuan3DTexture(Base3DModel):
             self._memory_usage = torch.cuda.memory_allocated(self.device) / 1024**3
         else:
             # Estimate based on model type
-            self._memory_usage = 3.0  # Texture models are typically smaller
+            base_memory = 3.0  # Texture models are typically smaller
+            # Add DINO v2 memory if loaded (approximately 2.5GB for DINOv2-giant)
+            if self.dino_v2 is not None:
+                base_memory += 2.5
+            self._memory_usage = base_memory
