@@ -19,8 +19,7 @@ import gc
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from hunyuan3d_app.models.threed.orchestrator import ThreeDOrchestrator
-from hunyuan3d_app.models.threed.config import ThreeDConfig
-from hunyuan3d_app.generation.image import generate_text_to_image
+from hunyuan3d_app.models.threed.hunyuan3d.config import HunYuan3DConfig
 import psutil
 
 # Configure logging
@@ -50,26 +49,14 @@ def create_test_image(prompt=None):
         logger.info(f"Using example image: {example_path}")
         return Image.open(example_path)
     
-    # Otherwise create a simple test image
+    # Create a simple test image
     logger.info("Creating test image...")
-    if prompt:
-        # Try to generate an image using text-to-image
-        try:
-            result = generate_text_to_image(
-                prompt=prompt,
-                model_name="SDXL-Turbo",
-                width=512,
-                height=512,
-                num_inference_steps=4,
-                guidance_scale=1.0
-            )
-            if result and "image" in result:
-                return result["image"]
-        except Exception as e:
-            logger.warning(f"Failed to generate image: {e}")
-    
-    # Fallback to a solid color image
-    img = Image.new('RGB', (512, 512), color='red')
+    # Create a simple gradient test image
+    img = Image.new('RGB', (512, 512))
+    pixels = img.load()
+    for i in range(512):
+        for j in range(512):
+            pixels[i, j] = (int(i/2), int(j/2), 128)
     return img
 
 
@@ -104,12 +91,10 @@ def test_pipeline(args):
         # Initialize orchestrator
         stage_start = time.time()
         logger.info("Initializing 3D orchestrator...")
-        config = ThreeDConfig(
+        config = HunYuan3DConfig(
+            model_variant=args.model,
             device=args.device,
-            model_type=args.model,
-            enable_texture=not args.skip_texture,
-            num_inference_steps=args.steps,
-            output_format="glb"
+            enable_texture=not args.skip_texture
         )
         
         orchestrator = ThreeDOrchestrator(config)
@@ -118,16 +103,8 @@ def test_pipeline(args):
         cpu_mem, gpu_mem = get_memory_usage()
         logger.info(f"After init - CPU: {cpu_mem:.2f}GB, GPU: {gpu_mem:.2f}GB")
         
-        # Load model
-        stage_start = time.time()
-        logger.info(f"Loading {args.model} model...")
-        success = orchestrator.load_model(args.model)
-        if not success:
-            raise RuntimeError(f"Failed to load model: {args.model}")
-        stage_times['model_loading'] = time.time() - stage_start
-        
         cpu_mem, gpu_mem = get_memory_usage()
-        logger.info(f"After model load - CPU: {cpu_mem:.2f}GB, GPU: {gpu_mem:.2f}GB")
+        logger.info(f"After orchestrator init - CPU: {cpu_mem:.2f}GB, GPU: {gpu_mem:.2f}GB")
         
         # Generate 3D
         stage_start = time.time()
@@ -138,9 +115,7 @@ def test_pipeline(args):
                 logger.info(f"Progress: {step}/{total} - {message}")
         
         result = orchestrator.generate(
-            prompt=args.prompt or "A red cube",
-            image=test_image,
-            seed=args.seed,
+            input_data=test_image,
             progress_callback=progress_callback
         )
         stage_times['generation'] = time.time() - stage_start
