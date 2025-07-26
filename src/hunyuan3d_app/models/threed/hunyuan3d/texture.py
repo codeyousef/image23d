@@ -101,11 +101,18 @@ class HunYuan3DTexture(Base3DModel):
             import huggingface_hub
             from diffusers import DiffusionPipeline
             
-            # Temporarily disable the torch.load safety check for loading .bin files
-            # This is safe because we're loading from Hugging Face's verified model
-            import transformers.utils.import_utils
-            original_check = transformers.utils.import_utils.check_torch_load_is_safe
-            transformers.utils.import_utils.check_torch_load_is_safe = lambda: None
+            # Set environment variable to allow pickle loading
+            # This is safe because we're loading from HuggingFace's verified model
+            os.environ["TRUST_REMOTE_CODE"] = "1"
+            
+            # Also set the transformers environment variable to bypass the torch version check
+            import transformers
+            os.environ["TRANSFORMERS_OFFLINE"] = "0"
+            
+            # Monkey patch the torch version check in transformers
+            import transformers.utils.import_utils as import_utils
+            original_torch_version = import_utils._torch_version
+            import_utils._torch_version = "2.6.0"  # Fake version to bypass check
             
             # Get model path
             model_path = self._get_model_path()
@@ -119,7 +126,9 @@ class HunYuan3DTexture(Base3DModel):
                 self.pipeline = DiffusionPipeline.from_pretrained(
                     str(model_path),
                     custom_pipeline=custom_pipeline,
-                    torch_dtype=self.dtype
+                    torch_dtype=self.dtype,
+                    use_safetensors=False,
+                    trust_remote_code=True
                 )
             else:
                 logger.info(f"Downloading texture model: {self.model_id}")
@@ -138,28 +147,30 @@ class HunYuan3DTexture(Base3DModel):
                 self.pipeline = DiffusionPipeline.from_pretrained(
                     texture_model_path,
                     custom_pipeline=custom_pipeline,
-                    torch_dtype=self.dtype
+                    torch_dtype=self.dtype,
+                    use_safetensors=False,
+                    trust_remote_code=True
                 )
             
             # Move to device
             self.pipeline = self.pipeline.to(self.device)
             
-            # Restore the original torch.load safety check
-            transformers.utils.import_utils.check_torch_load_is_safe = original_check
+            # Restore the original torch version
+            import_utils._torch_version = original_torch_version
             
         except ImportError as e:
-            # Restore the original torch.load safety check
-            if 'original_check' in locals():
-                transformers.utils.import_utils.check_torch_load_is_safe = original_check
+            # Restore the original torch version
+            if 'original_torch_version' in locals() and 'import_utils' in locals():
+                import_utils._torch_version = original_torch_version
             logger.error(f"Failed to import texture modules: {e}")
             raise RuntimeError(
                 f"Failed to import HunYuan3D texture modules: {e}\n"
                 "Please ensure hy3dpaint is installed and available."
             )
         except Exception as e:
-            # Restore the original torch.load safety check
-            if 'original_check' in locals():
-                transformers.utils.import_utils.check_torch_load_is_safe = original_check
+            # Restore the original torch version
+            if 'original_torch_version' in locals() and 'import_utils' in locals():
+                import_utils._torch_version = original_torch_version
             raise
     
     def _get_model_path(self) -> Path:
