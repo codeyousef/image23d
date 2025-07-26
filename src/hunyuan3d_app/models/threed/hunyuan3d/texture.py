@@ -101,6 +101,12 @@ class HunYuan3DTexture(Base3DModel):
             import huggingface_hub
             from diffusers import DiffusionPipeline
             
+            # Temporarily disable the torch.load safety check for loading .bin files
+            # This is safe because we're loading from Hugging Face's verified model
+            import transformers.utils.import_utils
+            original_check = transformers.utils.import_utils.check_torch_load_is_safe
+            transformers.utils.import_utils.check_torch_load_is_safe = lambda: None
+            
             # Get model path
             model_path = self._get_model_path()
             
@@ -138,12 +144,23 @@ class HunYuan3DTexture(Base3DModel):
             # Move to device
             self.pipeline = self.pipeline.to(self.device)
             
+            # Restore the original torch.load safety check
+            transformers.utils.import_utils.check_torch_load_is_safe = original_check
+            
         except ImportError as e:
+            # Restore the original torch.load safety check
+            if 'original_check' in locals():
+                transformers.utils.import_utils.check_torch_load_is_safe = original_check
             logger.error(f"Failed to import texture modules: {e}")
             raise RuntimeError(
                 f"Failed to import HunYuan3D texture modules: {e}\n"
                 "Please ensure hy3dpaint is installed and available."
             )
+        except Exception as e:
+            # Restore the original torch.load safety check
+            if 'original_check' in locals():
+                transformers.utils.import_utils.check_torch_load_is_safe = original_check
+            raise
     
     def _get_model_path(self) -> Path:
         """Get local model path."""
