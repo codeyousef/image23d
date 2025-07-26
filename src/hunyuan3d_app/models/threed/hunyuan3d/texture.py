@@ -95,82 +95,70 @@ class HunYuan3DTexture(Base3DModel):
         self.load()
     
     def _load_texture_pipeline(self):
-        """Load the texture generation pipeline."""
+        """Load the texture generation pipeline - using official HunYuan3D approach."""
         try:
-            # Import HunYuan3D paint modules
+            # Import required modules
             import huggingface_hub
             from diffusers import DiffusionPipeline
+            from diffusers import UniPCMultistepScheduler
             
-            # Set environment variable to allow pickle loading
-            # This is safe because we're loading from HuggingFace's verified model
-            os.environ["TRUST_REMOTE_CODE"] = "1"
-            
-            # Also set the transformers environment variable to bypass the torch version check
-            import transformers
-            os.environ["TRANSFORMERS_OFFLINE"] = "0"
-            
-            # Monkey patch the torch version check in transformers
-            import transformers.utils.import_utils as import_utils
-            original_torch_version = import_utils._torch_version
-            import_utils._torch_version = "2.6.0"  # Fake version to bypass check
-            
-            # Get model path
-            model_path = self._get_model_path()
-            
-            # Get custom pipeline path
-            custom_pipeline = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..", "Hunyuan3D", "hy3dpaint", "hunyuanpaintpbr")
+            # Get custom pipeline path (relative to this file)
+            custom_pipeline = os.path.join(
+                os.path.dirname(__file__), 
+                "..", "..", "..", "..", "..", 
+                "Hunyuan3D", "hy3dpaint", "hunyuanpaintpbr"
+            )
             custom_pipeline = os.path.abspath(custom_pipeline)
             
+            # Check if model already exists locally
+            model_path = self._get_model_path()
+            
             if model_path.exists():
-                logger.info(f"Loading texture model from: {model_path}")
-                self.pipeline = DiffusionPipeline.from_pretrained(
-                    str(model_path),
-                    custom_pipeline=custom_pipeline,
-                    torch_dtype=self.dtype,
-                    use_safetensors=False,
-                    trust_remote_code=True
-                )
+                logger.info(f"Loading texture model from local path: {model_path}")
+                model_load_path = str(model_path)
             else:
                 logger.info(f"Downloading texture model: {self.model_id}")
-                # Download the model using snapshot_download
+                # Download using snapshot_download like official implementation
                 cache_dir = self.config.cache_dir or str(Path.home() / ".cache" / "huggingface")
                 model_snapshot_path = huggingface_hub.snapshot_download(
                     repo_id=self.variant_info['repo_id'],
                     allow_patterns=["hunyuan3d-paintpbr-v2-1/*"],
                     cache_dir=cache_dir
                 )
-                
-                # Load from the specific subdirectory
-                texture_model_path = os.path.join(model_snapshot_path, "hunyuan3d-paintpbr-v2-1")
-                logger.info(f"Loading texture model from: {texture_model_path}")
-                
-                self.pipeline = DiffusionPipeline.from_pretrained(
-                    texture_model_path,
-                    custom_pipeline=custom_pipeline,
-                    torch_dtype=self.dtype,
-                    use_safetensors=False,
-                    trust_remote_code=True
-                )
+                model_load_path = os.path.join(model_snapshot_path, "hunyuan3d-paintpbr-v2-1")
+            
+            logger.info(f"Loading pipeline from: {model_load_path}")
+            
+            # Load pipeline exactly like the official implementation
+            self.pipeline = DiffusionPipeline.from_pretrained(
+                model_load_path,
+                custom_pipeline=custom_pipeline,
+                torch_dtype=torch.float16  # Use float16 like official implementation
+            )
+            
+            # Configure scheduler like official implementation
+            self.pipeline.scheduler = UniPCMultistepScheduler.from_config(
+                self.pipeline.scheduler.config, 
+                timestep_spacing="trailing"
+            )
+            self.pipeline.set_progress_bar_config(disable=True)
+            self.pipeline.eval()
+            
+            # Set view size if needed
+            if hasattr(self.pipeline, 'unet'):
+                setattr(self.pipeline, "view_size", 320)  # Default from official config
             
             # Move to device
             self.pipeline = self.pipeline.to(self.device)
             
-            # Restore the original torch version
-            import_utils._torch_version = original_torch_version
-            
         except ImportError as e:
-            # Restore the original torch version
-            if 'original_torch_version' in locals() and 'import_utils' in locals():
-                import_utils._torch_version = original_torch_version
             logger.error(f"Failed to import texture modules: {e}")
             raise RuntimeError(
                 f"Failed to import HunYuan3D texture modules: {e}\n"
                 "Please ensure hy3dpaint is installed and available."
             )
         except Exception as e:
-            # Restore the original torch version
-            if 'original_torch_version' in locals() and 'import_utils' in locals():
-                import_utils._torch_version = original_torch_version
+            logger.error(f"Failed to load texture pipeline: {e}")
             raise
     
     def _get_model_path(self) -> Path:
