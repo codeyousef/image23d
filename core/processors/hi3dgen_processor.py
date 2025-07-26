@@ -44,8 +44,10 @@ class Hi3DGenProcessor(ThreeDProcessor):
         """Load the Hi3DGen pipeline"""
         # TODO: Implement actual Hi3DGen model loading
         # This would load the Trellis normal estimation model and Hi3DGen components
-        logger.warning(f"Hi3DGen model loading not yet implemented for {model_id}")
-        return {"model_id": model_id, "type": "hi3dgen_placeholder"}
+        raise NotImplementedError(
+            f"Hi3DGen model loading not yet implemented for {model_id}. "
+            "This is an experimental processor that requires additional development."
+        )
         
     async def _estimate_normal_map(
         self,
@@ -245,7 +247,10 @@ class Hi3DGenProcessor(ThreeDProcessor):
         """Reconstruct 3D mesh using Hi3DGen normal bridging approach"""
         try:
             if not normal_map:
-                return self._create_placeholder_mesh(output_dir)
+                raise RuntimeError(
+                    "No normal map available for Hi3DGen reconstruction. "
+                    "The normal estimation step failed."
+                )
             normal_np = np.array(normal_map.convert("RGB")).astype(np.float32) / 255.0
             height_field = integrate_normals_to_height(normal_np)
             vertices, faces = generate_mesh_from_height_field(height_field, resolution)
@@ -256,12 +261,13 @@ class Hi3DGenProcessor(ThreeDProcessor):
             return mesh_path
         except Exception as e:
             logger.error(f"Hi3DGen reconstruction failed: {e}")
-            return self._create_placeholder_mesh(output_dir)
+            raise RuntimeError(f"Hi3DGen mesh reconstruction failed: {str(e)}")
             
     def _create_placeholder_mesh(self, output_dir: Path) -> Path:
-        """Create placeholder mesh"""
-        mesh_path = output_dir / "hi3dgen_mesh.obj"
-        with open(mesh_path, "w") as f:
-            f.write("# Hi3DGen Placeholder\\nv -1 -1 0\\nv 1 -1 0\\nv 1 1 0\\nv -1 1 0\\nf 1 2 3\\nf 1 3 4\\n")
-        return mesh_path
+        """This method should not be used - proper Hi3DGen reconstruction required."""
+        raise RuntimeError(
+            "Hi3DGen mesh reconstruction failed. "
+            "The Hi3DGen processor is not properly implemented. "
+            "This is an experimental feature that requires additional development."
+        )
 

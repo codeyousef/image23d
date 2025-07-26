@@ -95,27 +95,11 @@ class ThreeDConverter:
                 logger.error(f"Hunyuan3D conversion failed: {e}")
                 logger.error(f"Error type: {type(e).__name__}")
                 logger.error(f"Full traceback: {traceback.format_exc()}")
-                logger.warning("Falling back to demonstration model - this is NOT using the actual Hunyuan3D model!")
                 
-                # Create a warning message for the user
-                demo_info = f"""
-<div class="warning-box" style="padding: 15px; background: #fff3e0; border-radius: 8px; border-left: 4px solid #ff9800;">
-    <h4>⚠️ Using Demonstration Model</h4>
-    <p><strong>Important:</strong> The actual Hunyuan3D model failed to load, so a simplified demonstration model is being used instead.</p>
-    <p><strong>Error:</strong> {str(e)}</p>
-    <p>This demo model does NOT use your text prompt for 3D generation - it only analyzes the generated image.</p>
-    <p><strong>To fix this:</strong></p>
-    <ul>
-        <li>Check the console logs for detailed error messages</li>
-        <li>Ensure Hunyuan3D dependencies are installed</li>
-        <li>Verify the model files are complete</li>
-    </ul>
-</div>
-"""
-                # No placeholder - fail with clear message
+                # No fallback - fail with clear message
                 raise RuntimeError(
                     f"3D conversion failed: {str(e)}\n\n"
-                    f"To use HunYuan3D 2.1:\n"
+                    f"To use HunYuan3D {hunyuan3d_model_name}:\n"
                     f"1. Ensure Hunyuan3D repository is available\n"
                     f"2. Install dependencies: pip install -e ./Hunyuan3D\n"
                     f"3. Check that model weights are in models/3d/{hunyuan3d_model_name}/"

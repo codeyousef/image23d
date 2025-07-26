@@ -42,8 +42,10 @@ class Sparc3DProcessor(ThreeDProcessor):
         """Load the Sparc3D pipeline"""
         # TODO: Implement actual Sparc3D model loading
         # For now, return a placeholder
-        logger.warning(f"Sparc3D model loading not yet implemented for {model_id}")
-        return {"model_id": model_id, "type": "sparc3d_placeholder"}
+        raise NotImplementedError(
+            f"Sparc3D model loading not yet implemented for {model_id}. "
+            "This is an experimental processor that requires additional development."
+        )
         
     async def _generate_multiview(
         self,
@@ -196,8 +198,10 @@ class Sparc3DProcessor(ThreeDProcessor):
             
         except Exception as e:
             logger.error(f"Sparse cube generation failed: {e}")
-            # Fallback to lower resolution
-            return await self._generate_sparse_cubes_fallback(input_image, resolution // 2)
+            raise RuntimeError(
+                f"Sparc3D sparse cube generation failed: {str(e)}\n"
+                "This experimental processor requires further development."
+            )
             
     async def _render_multiview_from_sparse(self, sparse_cubes: np.ndarray, num_views: int, progress_callback=None) -> List[Image.Image]:
         """Render multiple views from sparse 3D representation"""
@@ -234,8 +238,10 @@ class Sparc3DProcessor(ThreeDProcessor):
             occupied = np.where(sparse_cubes[:, :, :, 3] > 0.1)  # Threshold for occupied voxels
             
             if len(occupied[0]) == 0:
-                logger.warning("No occupied voxels found, creating placeholder mesh")
-                return self._create_placeholder_mesh(output_dir)
+                raise RuntimeError(
+                    "No occupied voxels found in sparse representation. "
+                    "The Sparc3D reconstruction failed to generate valid geometry."
+                )
             
             # Create voxel positions and colors
             positions = np.stack(occupied, axis=1).astype(np.float32)
@@ -285,53 +291,13 @@ class Sparc3DProcessor(ThreeDProcessor):
             
         except Exception as e:
             logger.error(f"Mesh reconstruction from sparse cubes failed: {e}")
-            return self._create_placeholder_mesh(output_dir)
+            raise RuntimeError(f"Sparc3D mesh reconstruction failed: {str(e)}")
             
     def _create_placeholder_mesh(self, output_dir: Path) -> Path:
-        """Create a simple placeholder mesh"""
-        mesh_path = output_dir / "sparc3d_mesh.obj"
-        with open(mesh_path, 'w') as f:
-            f.write("# Sparc3D Placeholder Mesh\\n")
-            f.write("v -1 -1 -1\\n")
-            f.write("v 1 -1 -1\\n")
-            f.write("v 1 1 -1\\n")
-            f.write("v -1 1 -1\\n")
-            f.write("v -1 -1 1\\n")
-            f.write("v 1 -1 1\\n")
-            f.write("v 1 1 1\\n")
-            f.write("v -1 1 1\\n")
-            f.write("f 1 2 3 4\\n")
-            f.write("f 5 8 7 6\\n")
-            f.write("f 1 5 6 2\\n")
-            f.write("f 2 6 7 3\\n")
-            f.write("f 3 7 8 4\\n")
-            f.write("f 4 8 5 1\\n")
-        return mesh_path
+        """This method should not be used - proper Sparc3D reconstruction required."""
+        raise RuntimeError(
+            "Sparc3D mesh reconstruction failed. "
+            "The Sparc3D processor is not properly implemented. "
+            "This is an experimental feature that requires additional development."
+        )
         
-    async def _generate_sparse_cubes_fallback(self, input_image: Image.Image, resolution: int) -> np.ndarray:
-        """Fallback method for sparse cube generation at lower resolution"""
-        logger.info(f"Using fallback sparse cube generation at {resolution}³ resolution")
-        
-        # Simplified sparse cube generation
-        image_np = np.array(input_image.convert('RGB')).astype(np.float32) / 255.0
-        h, w = image_np.shape[:2]
-        
-        # Create sparse grid
-        sparse_grid = np.zeros((resolution, resolution, resolution, 4), dtype=np.float32)
-        
-        # Simple depth estimation
-        gray = np.mean(image_np, axis=2)
-        depth = 1.0 - gray  # Darker pixels are further
-        
-        # Fill grid with simplified mapping
-        for i in range(0, h, max(1, h // resolution)):
-            for j in range(0, w, max(1, w // resolution)):
-                if i < h and j < w:
-                    x = min(j * resolution // w, resolution - 1)
-                    y = min(i * resolution // h, resolution - 1)
-                    z = min(int(depth[i, j] * (resolution - 1)), resolution - 1)
-                    
-                    sparse_grid[x, y, z, :3] = image_np[i, j]
-                    sparse_grid[x, y, z, 3] = 0.8  # High confidence
-                    
-        return sparse_grid

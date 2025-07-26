@@ -656,18 +656,11 @@ class IntermediateOutputHandler:
                         continue
                 except Exception as e:
                     logger.error(f"Failed to render Trimesh object: {e}")
-                    # Create a placeholder image indicating this was a 3D mesh
-                    try:
-                        from PIL import ImageDraw, ImageFont
-                        placeholder = Image.new('RGB', (512, 512), color='lightgray')
-                        draw = ImageDraw.Draw(placeholder)
-                        text = f"3D Mesh\n{img.vertices.shape[0]} vertices\n{img.faces.shape[0]} faces"
-                        draw.text((256, 256), text, fill='black', anchor='mm')
-                        placeholder.save(path)
-                        logger.info(f"Created placeholder image for Trimesh: {path}")
-                    except Exception as e2:
-                        logger.error(f"Failed to create placeholder image: {e2}")
-                        continue
+                    raise RuntimeError(
+                        f"Failed to render 3D mesh for visualization: {str(e)}\n"
+                        "The multiview generation returned a 3D mesh instead of images. "
+                        "This indicates the wrong pipeline is being used."
+                    )
             else:
                 logger.error(f"Unknown image type: {type(img)}. Expected PIL Image, numpy array, torch tensor, or Trimesh object.")
                 # Try to convert to string representation for debugging
