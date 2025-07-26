@@ -51,7 +51,8 @@
       "Bash(PYTHONPATH=/mnt/d/Projects/Python/hunyuan3d-app python -m pytest tests/real_imports/test_real_imports.py -v --no-cov)",
       "Bash(PYTHONPATH=/mnt/d/Projects/Python/hunyuan3d-app:/mnt/d/Projects/Python/hunyuan3d-app/src python -m pytest tests/real_imports/test_end_to_end.py -v --no-cov)",
       "Bash(PYTHONPATH=/mnt/d/Projects/Python/hunyuan3d-app:/mnt/d/Projects/Python/hunyuan3d-app/src python -m pytest tests/real_imports/test_end_to_end.py::TestEndToEndFunctionality::test_hunyuan3d_studio_initialization -v --no-cov)",
-      "Bash(PYTHONPATH=/mnt/d/Projects/Python/hunyuan3d-app:/mnt/d/Projects/Python/hunyuan3d-app/src python -m pytest tests/real_imports/test_desktop_startup.py -v --no-cov)"
+      "Bash(PYTHONPATH=/mnt/d/Projects/Python/hunyuan3d-app:/mnt/d/Projects/Python/hunyuan3d-app/src python -m pytest tests/real_imports/test_desktop_startup.py -v --no-cov)",
+      "WebFetch(domain:huggingface.co)"
     ],
     "deny": []
   }

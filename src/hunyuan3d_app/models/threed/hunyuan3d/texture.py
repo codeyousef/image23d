@@ -98,18 +98,22 @@ class HunYuan3DTexture(Base3DModel):
         """Load the texture generation pipeline."""
         try:
             # Import HunYuan3D paint modules
-            from hy3dpaint.hunyuanpaintpbr import HunyuanPaintPipeline
             import huggingface_hub
+            from diffusers import DiffusionPipeline
             
             # Get model path
             model_path = self._get_model_path()
             
+            # Get custom pipeline path
+            custom_pipeline = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..", "Hunyuan3D", "hy3dpaint", "hunyuanpaintpbr")
+            custom_pipeline = os.path.abspath(custom_pipeline)
+            
             if model_path.exists():
                 logger.info(f"Loading texture model from: {model_path}")
-                self.pipeline = HunyuanPaintPipeline.from_pretrained(
+                self.pipeline = DiffusionPipeline.from_pretrained(
                     str(model_path),
-                    torch_dtype=self.dtype,
-                    use_safetensors=True
+                    custom_pipeline=custom_pipeline,
+                    torch_dtype=self.dtype
                 )
             else:
                 logger.info(f"Downloading texture model: {self.model_id}")
@@ -125,10 +129,10 @@ class HunYuan3DTexture(Base3DModel):
                 texture_model_path = os.path.join(model_snapshot_path, "hunyuan3d-paintpbr-v2-1")
                 logger.info(f"Loading texture model from: {texture_model_path}")
                 
-                self.pipeline = HunyuanPaintPipeline.from_pretrained(
+                self.pipeline = DiffusionPipeline.from_pretrained(
                     texture_model_path,
-                    torch_dtype=self.dtype,
-                    use_safetensors=True
+                    custom_pipeline=custom_pipeline,
+                    torch_dtype=self.dtype
                 )
             
             # Move to device
