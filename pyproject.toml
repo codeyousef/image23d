@@ -78,6 +78,7 @@ dependencies = [
     "qasync>=0.24.0",
     "pywebview>=5.4",
     "mediapipe>=0.10.21",
+    "pytorch-lightning>=2.0.0",  # Required for HunYuan3D texture generation
 ]
 
 [project.optional-dependencies]
