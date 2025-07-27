@@ -4,7 +4,7 @@ import gradio as gr
 from typing import Any, List
 
 from ..components.common import update_model_dropdowns_helper, create_action_button
-from ...config import IMAGE_MODELS, GATED_IMAGE_MODELS, GGUF_IMAGE_MODELS, HUNYUAN3D_MODELS
+from ...config import IMAGE_MODELS, GATED_IMAGE_MODELS, GGUF_IMAGE_MODELS, HUNYUAN3D_MODELS, VIDEO_MODELS, TEXTURE_PIPELINE_COMPONENTS
 
 
 def create_model_management_tab(app: Any, model_status: gr.HTML, manual_img_model: gr.Dropdown, manual_3d_model: gr.Dropdown):
@@ -16,6 +16,24 @@ def create_model_management_tab(app: Any, model_status: gr.HTML, manual_img_mode
         manual_img_model: Manual pipeline image model dropdown
         manual_3d_model: Manual pipeline 3D model dropdown
     """
+    
+    # Helper function to extract size in GB from size string
+    def get_size_gb(size_str):
+        """Extract size in GB from size string like '~10 GB' or '10GB'"""
+        if isinstance(size_str, (int, float)):
+            return size_str
+        import re
+        match = re.search(r'(\d+(?:\.\d+)?)', str(size_str))
+        return float(match.group(1)) if match else 8.0
+    
+    # Helper function to extract VRAM in GB
+    def get_vram_gb(vram_str):
+        """Extract VRAM requirement from string like '12GB+' """
+        if isinstance(vram_str, (int, float)):
+            return vram_str
+        import re
+        match = re.search(r'(\d+)', str(vram_str))
+        return int(match.group(1)) if match else 8
     gr.Markdown("""
     ### Download and Manage AI Models
     Download models for offline use and manage your model library.
@@ -52,7 +70,7 @@ def create_model_management_tab(app: Any, model_status: gr.HTML, manual_img_mode
                 components=[gr.Textbox(visible=False)],
                 headers=["Model", "Size", "VRAM", "Description", "Status"],
                 samples=[
-                    [name, f"{info['size_gb']}GB", f"{info.get('recommended_vram_gb', 8)}GB+", 
+                    [name, info.get('size', 'Unknown'), info.get('vram_required', '8GB+'), 
                      info.get('description', ''), app.check_model_downloaded("image", name)]
                     for name, info in IMAGE_MODELS.items()
                 ],
@@ -65,7 +83,7 @@ def create_model_management_tab(app: Any, model_status: gr.HTML, manual_img_mode
                 components=[gr.Textbox(visible=False)],
                 headers=["Model", "Size", "VRAM", "Description", "Status"],
                 samples=[
-                    [name, f"{info['size_gb']}GB", f"{info.get('recommended_vram_gb', 8)}GB+",
+                    [name, info.get('size', 'Unknown'), info.get('vram_required', '8GB+'),
                      info.get('description', ''), app.check_model_downloaded("image", name)]
                     for name, info in GATED_IMAGE_MODELS.items()
                 ],
@@ -78,7 +96,7 @@ def create_model_management_tab(app: Any, model_status: gr.HTML, manual_img_mode
                 components=[gr.Textbox(visible=False)],
                 headers=["Model", "Size", "VRAM", "Description", "Status"],
                 samples=[
-                    [name, f"{info['size_gb']}GB", f"{info.get('recommended_vram_gb', 6)}GB+",
+                    [name, info.get('size', 'Unknown'), info.get('vram_required', '6GB+'),
                      info.get('description', ''), app.check_model_downloaded("image", name)]
                     for name, info in GGUF_IMAGE_MODELS.items()
                 ],
@@ -109,7 +127,7 @@ def create_model_management_tab(app: Any, model_status: gr.HTML, manual_img_mode
                 components=[gr.Textbox(visible=False)],
                 headers=["Model", "Size", "VRAM", "Description", "Status"],
                 samples=[
-                    [name, f"{info['size_gb']}GB", f"{info.get('recommended_vram_gb', 12)}GB+",
+                    [name, info.get('size', 'Unknown'), info.get('vram_required', '12GB+'),
                      info.get('description', ''), app.check_model_downloaded("3d", name)]
                     for name, info in HUNYUAN3D_MODELS.items()
                 ],
@@ -132,6 +150,42 @@ def create_model_management_tab(app: Any, model_status: gr.HTML, manual_img_mode
                     variant="stop",
                     size="sm"
                 )
+        
+        # Video Models Tab
+        with gr.Tab("🎬 Video Models"):
+            gr.Markdown("#### Text-to-Video Models")
+            video_models = gr.Dataset(
+                components=[gr.Textbox(visible=False)],
+                headers=["Model", "Size", "VRAM", "Description", "Status"],
+                samples=[
+                    [name, info.get('size', 'Unknown'), info.get('vram_required', '12GB+'),
+                     info.get('description', ''), app.check_model_downloaded("video", name)]
+                    for name, info in VIDEO_MODELS.items()
+                ],
+                elem_id="video-models-table"
+            )
+            
+            # Model actions
+            with gr.Row():
+                selected_video_model = gr.Textbox(
+                    label="Selected Model",
+                    interactive=False
+                )
+                video_download_btn = create_action_button(
+                    label="📥 Download",
+                    variant="primary",
+                    size="sm"
+                )
+                video_delete_btn = create_action_button(
+                    label="🗑️ Delete",
+                    variant="stop",
+                    size="sm"
+                )
+        
+        # Texture Components Tab
+        with gr.Tab("🎨 Texture Components"):
+            from .settings.texture_components import create_texture_components_tab
+            create_texture_components_tab(app)
     
     # Download progress
     with gr.Group():
@@ -176,6 +230,11 @@ def create_model_management_tab(app: Any, model_status: gr.HTML, manual_img_mode
         outputs=[selected_3d_model]
     )
     
+    video_models.select(
+        fn=lambda evt: select_model(evt, "video"),
+        outputs=[selected_video_model]
+    )
+    
     # Download handlers
     def download_and_update(model_name: str, model_type: str):
         result = app.download_model(model_name, model_type)
@@ -198,6 +257,12 @@ def create_model_management_tab(app: Any, model_status: gr.HTML, manual_img_mode
         outputs=[download_progress, manual_img_model, manual_3d_model]
     )
     
+    video_download_btn.click(
+        fn=lambda name: download_and_update(name, "video"),
+        inputs=[selected_video_model],
+        outputs=[download_progress, manual_img_model, manual_3d_model]
+    )
+    
     # Delete handlers
     def delete_and_update(model_name: str, model_type: str):
         result = app.delete_model(model_name, model_type)
@@ -217,6 +282,12 @@ def create_model_management_tab(app: Any, model_status: gr.HTML, manual_img_mode
     hunyuan_delete_btn.click(
         fn=lambda name: delete_and_update(name, "3d"),
         inputs=[selected_3d_model],
+        outputs=[download_progress, model_status, manual_img_model, manual_3d_model]
+    )
+    
+    video_delete_btn.click(
+        fn=lambda name: delete_and_update(name, "video"),
+        inputs=[selected_video_model],
         outputs=[download_progress, model_status, manual_img_model, manual_3d_model]
     )
     
