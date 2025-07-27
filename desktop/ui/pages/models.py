@@ -346,11 +346,7 @@ class ModelsPage:
                 
     def _render_video_models(self):
         """Render video models section"""
-        try:
-            from core.config import VIDEO_MODELS
-        except ImportError:
-            # Fallback import path
-            from src.hunyuan3d_app.config import VIDEO_MODELS
+        from core.config import VIDEO_MODELS
         
         with ui.column().classes('w-full gap-4'):
             ui.label('Text-to-Video Models').classes('text-lg font-semibold')
