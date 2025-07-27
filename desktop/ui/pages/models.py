@@ -29,6 +29,9 @@ class ModelsPage:
         self.download_tasks: Dict[str, asyncio.Task] = {}
         self.progress_cards: Dict[str, Any] = {}  # model_id -> UI elements
         self._page_container = None  # Store reference to page container
+        self.download_states: Dict[str, Dict[str, Any]] = {}  # model_id -> {status, progress, speed, eta, model_type, repo_id}
+        self.refreshable_cards: Dict[str, Any] = {}  # model_id -> refreshable function
+        self.downloads_container = None  # Container for downloads list
         
     def render(self):
         """Render the models page"""
@@ -52,6 +55,7 @@ class ModelsPage:
                 self.pipeline_tab = ui.tab('Pipeline Components', icon='schema')
                 self.video_tab = ui.tab('Video Models', icon='movie')
                 self.gguf_tab = ui.tab('GGUF Models', icon='memory')
+                self.downloads_tab = ui.tab('Downloads', icon='download')
                 
             with ui.tab_panels(tabs, value=self.image_tab).classes('w-full flex-grow'):
                 # Image Models Tab
@@ -73,6 +77,10 @@ class ModelsPage:
                 # GGUF Models Tab
                 with ui.tab_panel(self.gguf_tab):
                     self._render_gguf_models()
+                    
+                # Downloads Tab
+                with ui.tab_panel(self.downloads_tab):
+                    self._render_downloads_tab()
                     
     def _get_storage_stats(self) -> Dict[str, Any]:
         """Get storage statistics"""
@@ -409,6 +417,7 @@ class ModelsPage:
                     'based on available VRAM and quality requirements.'
                 ).classes('text-sm text-gray-400')
                 
+    @ui.refreshable
     def _render_model_card(self, model_id: str, name: str, description: str, 
                            size: str, vram_required: str, repo_id: str, 
                            model_type: str, is_gguf: bool = False, is_experimental: bool = False):
@@ -505,7 +514,7 @@ class ModelsPage:
                         ui.button(
                             'Download',
                             icon='download',
-                            on_click=lambda m=model_id, t=model_type, r=repo_id: self._download_model(m, t, r)
+                            on_click=lambda m=model_id, t=model_type, r=repo_id: self.start_download(m, t, r)
                         ).props('unelevated dense').style('background-color: #7C3AED')
                         
     def _check_model_downloaded(self, model_id: str, model_type: str) -> bool:
@@ -543,15 +552,37 @@ class ModelsPage:
                 # Generic check for other model types
                 model_path = self.models_dir / model_type / model_id
                 return model_path.exists() and any(model_path.iterdir()) if model_path.exists() else False
-        
-    async def _download_model(self, model_id: str, model_type: str, repo_id: str):
-        """Start downloading a model"""
+                
+    def start_download(self, model_id: str, model_type: str, repo_id: str):
+        """Start downloading a model with immediate UI feedback"""
         if model_id in self.downloading_models:
             ui.notify('Already downloading this model', type='warning')
             return
             
+        # Add to downloading state immediately
+        self.downloading_models[model_id] = 0
+        self.download_states[model_id] = {
+            'status': 'starting',
+            'progress': 0,
+            'speed': 0,
+            'eta': 'calculating...',
+            'model_type': model_type,
+            'repo_id': repo_id
+        }
+        
+        # Refresh the model card to show download progress
+        # Force a page refresh to update the UI
+        ui.run_javascript('window.location.reload()')
+        
+        # Start the actual async download
+        asyncio.create_task(self._download_model(model_id, model_type, repo_id))
+        
+    async def _download_model(self, model_id: str, model_type: str, repo_id: str):
+        """Async download handler"""
         # Show download instructions for 3D models
         if model_type == '3d':
+            self.download_states[model_id]['status'] = 'failed'
+            self.download_states[model_id]['error'] = 'Manual download required'
             ui.notify(
                 f'To download {model_id}, run:\n'
                 f'python scripts/download_hunyuan3d.py {model_id}\n'
@@ -561,7 +592,8 @@ class ModelsPage:
             )
             return
             
-        ui.notify(f'Starting download: {model_id}', type='info')
+        # Update status
+        self.download_states[model_id]['status'] = 'downloading'
         
         # Create download task using run.io_bound for proper context
         task = run.io_bound(self._download_model_async, model_id, model_type, repo_id)
@@ -570,8 +602,8 @@ class ModelsPage:
     async def _download_model_async(self, model_id: str, model_type: str, repo_id: str):
         """Async model download with progress"""
         try:
-            # Add to downloading list
-            self.downloading_models[model_id] = 0
+            # Update download state
+            self.download_states[model_id]['status'] = 'downloading'
             
             # Import required for actual download
             try:
@@ -580,6 +612,7 @@ class ModelsPage:
                 # Use actual download function if available
                 async def progress_callback(progress: float):
                     self.downloading_models[model_id] = progress * 100
+                    self.download_states[model_id]['progress'] = progress * 100
                     await self._update_progress_ui(model_id, progress * 100)
                     
                 success = await download_model_with_progress(
@@ -602,6 +635,11 @@ class ModelsPage:
                         break
                         
                     self.downloading_models[model_id] = i
+                    self.download_states[model_id]['progress'] = i
+                    # Simulate speed and ETA
+                    if i > 0:
+                        self.download_states[model_id]['speed'] = 10.5  # MB/s
+                        self.download_states[model_id]['eta'] = f'{(100-i)*0.1:.0f}s'
                     await self._update_progress_ui(model_id, i)
                     await asyncio.sleep(0.1)  # Simulate download time
                     
@@ -629,6 +667,9 @@ class ModelsPage:
         """Handle download completion"""
         if model_id in self.downloading_models:
             del self.downloading_models[model_id]
+        if model_id in self.download_states:
+            self.download_states[model_id]['status'] = 'completed'
+            self.download_states[model_id]['progress'] = 100
         # We'll show notification through UI refresh instead
         logger.info(f'Download complete: {model_id}')
         
@@ -636,6 +677,9 @@ class ModelsPage:
         """Handle download failure"""
         if model_id in self.downloading_models:
             del self.downloading_models[model_id]
+        if model_id in self.download_states:
+            self.download_states[model_id]['status'] = 'failed'
+            self.download_states[model_id]['error'] = error
         # Log error instead of trying to notify from async context
         logger.error(f'Download failed for {model_id}: {error}')
                 
@@ -647,7 +691,13 @@ class ModelsPage:
         if model_id in self.downloading_models:
             del self.downloading_models[model_id]
             
+        if model_id in self.download_states:
+            del self.download_states[model_id]
+            
         ui.notify(f'Cancelled download: {model_id}', type='info')
+        
+        # Refresh UI
+        ui.run_javascript('window.location.reload()')
         
     def _delete_model(self, model_id: str, model_type: str):
         """Delete a model with confirmation"""
@@ -663,6 +713,134 @@ class ModelsPage:
                 ).props('unelevated color=negative')
                 
         dialog.open()
+        
+    def _render_downloads_tab(self):
+        """Render downloads management tab"""
+        with ui.column().classes('w-full gap-4'):
+            # Header
+            with ui.row().classes('items-center justify-between mb-4'):
+                ui.label('Download Manager').classes('text-lg font-semibold')
+                with ui.row().classes('gap-2'):
+                    active_count = len([d for d in self.download_states.values() if d.get('status') in ['downloading', 'starting']])
+                    ui.label(f'{active_count} Active Downloads').classes('text-sm text-gray-400')
+                    
+            # Downloads list container
+            with ui.column().classes('w-full gap-2') as downloads_container:
+                self.downloads_container = downloads_container
+                self._update_downloads_list()
+                
+            # Auto-refresh downloads list
+            ui.timer(1.0, self._update_downloads_list)
+            
+    def _update_downloads_list(self):
+        """Update the downloads list UI"""
+        if not self.downloads_container:
+            return
+            
+        self.downloads_container.clear()
+        
+        if not self.download_states:
+            with self.downloads_container:
+                with ui.card().classes('w-full p-8 text-center').style('background-color: #0A0A0A; border: 1px solid #333333'):
+                    ui.icon('download_done', size='3rem').classes('text-gray-600 mb-4')
+                    ui.label('No active downloads').classes('text-gray-500')
+                    ui.label('Download models from other tabs to see them here').classes('text-sm text-gray-600')
+            return
+            
+        # Show each download
+        with self.downloads_container:
+            for model_id, state in self.download_states.items():
+                self._render_download_item(model_id, state)
+                
+    def _render_download_item(self, model_id: str, state: Dict[str, Any]):
+        """Render a single download item"""
+        with ui.card().classes('w-full').style('background-color: #0A0A0A; border: 1px solid #333333'):
+            with ui.row().classes('items-center justify-between'):
+                # Model info
+                with ui.column().classes('flex-grow'):
+                    with ui.row().classes('items-center gap-2'):
+                        ui.label(model_id).classes('font-semibold')
+                        status_color = {
+                            'starting': 'blue',
+                            'downloading': 'green',
+                            'paused': 'orange',
+                            'failed': 'red',
+                            'completed': 'green'
+                        }.get(state.get('status', 'starting'), 'gray')
+                        ui.badge(state.get('status', 'starting').upper()).props(f'color={status_color}')
+                        
+                    # Progress info
+                    progress = state.get('progress', 0)
+                    ui.linear_progress(progress / 100).classes('w-full mt-2')
+                    
+                    with ui.row().classes('gap-4 mt-1'):
+                        ui.label(f'{progress:.0f}%').classes('text-sm')
+                        if state.get('speed'):
+                            ui.label(f'{state["speed"]:.1f} MB/s').classes('text-sm text-gray-400')
+                        if state.get('eta'):
+                            ui.label(f'ETA: {state["eta"]}').classes('text-sm text-gray-400')
+                            
+                # Actions
+                with ui.row().classes('gap-2'):
+                    if state.get('status') == 'downloading':
+                        ui.button(
+                            'Pause',
+                            icon='pause',
+                            on_click=lambda m=model_id: self._pause_download(m)
+                        ).props('flat dense')
+                        ui.button(
+                            'Cancel',
+                            icon='close',
+                            on_click=lambda m=model_id: self._cancel_download(m)
+                        ).props('flat dense color=negative')
+                    elif state.get('status') == 'paused':
+                        ui.button(
+                            'Resume',
+                            icon='play_arrow',
+                            on_click=lambda m=model_id: self._resume_download(m)
+                        ).props('flat dense color=primary')
+                        ui.button(
+                            'Cancel',
+                            icon='close',
+                            on_click=lambda m=model_id: self._cancel_download(m)
+                        ).props('flat dense color=negative')
+                    elif state.get('status') == 'failed':
+                        ui.button(
+                            'Retry',
+                            icon='refresh',
+                            on_click=lambda m=model_id: self._retry_download(m)
+                        ).props('flat dense color=primary')
+                        ui.button(
+                            'Remove',
+                            icon='delete',
+                            on_click=lambda m=model_id: self._remove_download(m)
+                        ).props('flat dense')
+                        
+    def _pause_download(self, model_id: str):
+        """Pause a download"""
+        if model_id in self.download_states:
+            self.download_states[model_id]['status'] = 'paused'
+            # TODO: Implement actual pause logic
+            ui.notify(f'Paused download: {model_id}', type='info')
+            
+    def _resume_download(self, model_id: str):
+        """Resume a paused download"""
+        if model_id in self.download_states:
+            self.download_states[model_id]['status'] = 'downloading'
+            # TODO: Implement actual resume logic
+            ui.notify(f'Resumed download: {model_id}', type='info')
+            
+    def _retry_download(self, model_id: str):
+        """Retry a failed download"""
+        if model_id in self.download_states:
+            state = self.download_states[model_id]
+            self.start_download(model_id, state['model_type'], state['repo_id'])
+            
+    def _remove_download(self, model_id: str):
+        """Remove a download from the list"""
+        if model_id in self.download_states:
+            del self.download_states[model_id]
+            self._update_downloads_list()
         
     def _check_progress(self, model_id: str):
         """Check and update download progress"""
