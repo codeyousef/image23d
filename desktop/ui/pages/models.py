@@ -301,12 +301,71 @@ class ModelsPage:
                     model_type='preprocessing'
                 )
                 
+            # Texture Components
+            ui.separator().classes('my-6')
+            ui.label('Texture Components').classes('text-lg font-semibold')
+            ui.label('Models for high-quality texture generation and enhancement').classes('text-sm text-gray-400 mb-2')
+            
+            texture_models = [
+                {
+                    'id': 'dinov2-giant',
+                    'name': 'DINOv2 Giant',
+                    'description': 'Vision transformer for texture feature extraction',
+                    'size': '4.4 GB',
+                    'vram': '8GB+',
+                    'repo': 'facebook/dinov2-giant'
+                },
+                {
+                    'id': 'realesrgan-x4',
+                    'name': 'Real-ESRGAN x4',
+                    'description': 'AI-powered texture upscaling to 4x resolution',
+                    'size': '64 MB',
+                    'vram': '2GB+',
+                    'repo': 'ai-forever/Real-ESRGAN'
+                },
+                {
+                    'id': 'xatlas',
+                    'name': 'xatlas UV Unwrapper',
+                    'description': 'Advanced UV unwrapping for texture mapping',
+                    'size': '10 MB',
+                    'vram': '1GB+',
+                    'repo': 'local/xatlas'
+                }
+            ]
+            
+            for model in texture_models:
+                self._render_model_card(
+                    model_id=model['id'],
+                    name=model['name'],
+                    description=model['description'],
+                    size=model['size'],
+                    vram_required=model['vram'],
+                    repo_id=model['repo'],
+                    model_type='texture'
+                )
+                
     def _render_video_models(self):
         """Render video models section"""
-        with ui.column().classes('w-full items-center justify-center h-64'):
-            ui.icon('movie', size='4rem').classes('text-gray-600 mb-4')
-            ui.label('Video Models').classes('text-xl font-semibold mb-2')
-            ui.label('Coming soon...').classes('text-gray-500')
+        try:
+            from core.config import VIDEO_MODELS
+        except ImportError:
+            # Fallback import path
+            from src.hunyuan3d_app.config import VIDEO_MODELS
+        
+        with ui.column().classes('w-full gap-4'):
+            ui.label('Text-to-Video Models').classes('text-lg font-semibold')
+            ui.label('State-of-the-art video generation models').classes('text-sm text-gray-400 mb-2')
+            
+            for model_id, config in VIDEO_MODELS.items():
+                self._render_model_card(
+                    model_id=model_id,
+                    name=config['name'],
+                    description=config['description'],
+                    size=config['size'],
+                    vram_required=config['vram_required'],
+                    repo_id=config['repo_id'],
+                    model_type='video'
+                )
             
     def _render_gguf_models(self):
         """Render GGUF models section"""
@@ -558,6 +617,10 @@ class ModelsPage:
                 model_path = self.models_dir / 'depth' / model_id
             elif model_type == 'preprocessing':
                 model_path = self.models_dir / 'preprocessing' / model_id
+            elif model_type == 'texture':
+                model_path = self.models_dir / 'texture' / model_id
+            elif model_type == 'video':
+                model_path = self.models_dir / 'video' / model_id
             else:
                 model_path = self.models_dir / model_type / model_id
                 
@@ -596,6 +659,10 @@ class ModelsPage:
                     model_path = self.models_dir / 'depth' / model_id
                 elif model_type == 'preprocessing':
                     model_path = self.models_dir / 'preprocessing' / model_id
+                elif model_type == 'texture':
+                    model_path = self.models_dir / 'texture' / model_id
+                elif model_type == 'video':
+                    model_path = self.models_dir / 'video' / model_id
                 else:
                     model_path = self.models_dir / model_type / model_id
                     
