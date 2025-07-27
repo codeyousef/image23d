@@ -9,12 +9,13 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime
-from nicegui import ui
+from nicegui import ui, app
 import sys
 import os
 # Add project root to path to import from main app
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../../..'))
 import shutil
+from nicegui import run
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +28,11 @@ class ModelsPage:
         self.downloading_models: Dict[str, float] = {}  # model_id -> progress
         self.download_tasks: Dict[str, asyncio.Task] = {}
         self.progress_cards: Dict[str, Any] = {}  # model_id -> UI elements
+        self._page_container = None  # Store reference to page container
         
     def render(self):
         """Render the models page"""
-        with ui.column().classes('w-full h-full'):
+        with ui.column().classes('w-full h-full') as self._page_container:
             # Header
             with ui.card().classes('w-full mb-4').style('background-color: #1F1F1F; border: 1px solid #333333'):
                 with ui.row().classes('items-center justify-between'):
@@ -479,6 +481,12 @@ class ModelsPage:
                                 'bar': progress_bar,
                                 'container': progress_col
                             }
+                            
+                            # Set up timer to update progress
+                            timer = ui.timer(0.5, lambda: self._check_progress(model_id))
+                            # Store timer reference to stop it later
+                            if 'timer' not in self.progress_cards[model_id]:
+                                self.progress_cards[model_id]['timer'] = timer
                     elif is_downloaded:
                         # Model is downloaded
                         with ui.row().classes('gap-2'):
@@ -555,8 +563,8 @@ class ModelsPage:
             
         ui.notify(f'Starting download: {model_id}', type='info')
         
-        # Create download task
-        task = asyncio.create_task(self._download_model_async(model_id, model_type, repo_id))
+        # Create download task using run.io_bound for proper context
+        task = run.io_bound(self._download_model_async, model_id, model_type, repo_id)
         self.download_tasks[model_id] = task
         
     async def _download_model_async(self, model_id: str, model_type: str, repo_id: str):
@@ -613,28 +621,23 @@ class ModelsPage:
         """Update progress UI elements"""
         if model_id in self.progress_cards:
             cards = self.progress_cards[model_id]
-            # Update within the UI context using NiceGUI's update mechanism
-            loop = asyncio.get_event_loop()
-            loop.call_soon_threadsafe(lambda: (
-                cards['label'].set_text(f'{progress:.0f}%'),
-                cards['bar'].set_value(progress / 100)
-            ))
+            # Update UI elements directly - they will update on next refresh
+            cards['label'].text = f'{progress:.0f}%'
+            cards['bar'].value = progress / 100
             
     async def _download_complete(self, model_id: str):
         """Handle download completion"""
         if model_id in self.downloading_models:
             del self.downloading_models[model_id]
-        # Create notification in a way that works with NiceGUI's async handling
-        loop = asyncio.get_event_loop()
-        loop.call_soon_threadsafe(lambda: ui.notify(f'Downloaded: {model_id}', type='positive'))
+        # We'll show notification through UI refresh instead
+        logger.info(f'Download complete: {model_id}')
         
     async def _download_failed(self, model_id: str, error: str):
         """Handle download failure"""
         if model_id in self.downloading_models:
             del self.downloading_models[model_id]
-        # Create notification in a way that works with NiceGUI's async handling  
-        loop = asyncio.get_event_loop()
-        loop.call_soon_threadsafe(lambda: ui.notify(f'Download failed: {error}', type='negative'))
+        # Log error instead of trying to notify from async context
+        logger.error(f'Download failed for {model_id}: {error}')
                 
     def _cancel_download(self, model_id: str):
         """Cancel a download"""
@@ -660,6 +663,18 @@ class ModelsPage:
                 ).props('unelevated color=negative')
                 
         dialog.open()
+        
+    def _check_progress(self, model_id: str):
+        """Check and update download progress"""
+        if model_id in self.downloading_models and model_id in self.progress_cards:
+            progress = self.downloading_models[model_id]
+            cards = self.progress_cards[model_id]
+            cards['label'].text = f'{progress:.0f}%'
+            cards['bar'].value = progress / 100
+        else:
+            # Download complete or cancelled - stop timer
+            if model_id in self.progress_cards and 'timer' in self.progress_cards[model_id]:
+                self.progress_cards[model_id]['timer'].active = False
         
     def _confirm_delete_model(self, model_id: str, model_type: str, dialog):
         """Confirm model deletion"""
