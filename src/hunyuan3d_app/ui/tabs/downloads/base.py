@@ -27,18 +27,18 @@ def create_downloads_manager_tab(app: "HunyuanApp"):
     """Create downloads manager tab with concurrent downloads and resume support"""
     
     # Get texture components status
-    realesrgan_installed, xatlas_installed = check_texture_components_status()
+    realesrgan_installed, xatlas_installed, dinov2_installed = check_texture_components_status()
     
     # Show warning banner if texture components missing
     create_texture_warning_banner()
     
     # Add quick download texture components button if needed
-    if not realesrgan_installed or not xatlas_installed:
+    if not realesrgan_installed or not xatlas_installed or not dinov2_installed:
         with gr.Row():
             quick_texture_btn, texture_progress = create_quick_download_button(
                 app,
                 "🎨 Download Texture Components",
-                [("realesrgan", "texture_components"), ("xatlas", "texture_components")],
+                [("realesrgan", "texture_components"), ("xatlas", "texture_components"), ("dinov2", "texture_components")],
                 priority=3  # High priority
             )
     
@@ -58,6 +58,7 @@ def create_downloads_manager_tab(app: "HunyuanApp"):
         create_quick_start_tab(app)
         create_3d_models_tab(app)
         create_image_models_tab(app)
+        create_video_models_tab(app)
         create_pipeline_components_tab(app)
         create_advanced_features_tab(app)
         create_model_hub_search_tab(app)
@@ -104,7 +105,8 @@ def create_quick_start_tab(app: "HunyuanApp"):
                         ("sdxl-turbo", "image"),
                         ("ip-adapter-plus_sd15", "ip_adapter"),
                         ("realesrgan", "texture_components"),
-                        ("xatlas", "texture_components")
+                        ("xatlas", "texture_components"),
+                        ("dinov2", "texture_components")
                     ],
                     priority=2
                 )
@@ -122,7 +124,8 @@ def create_quick_start_tab(app: "HunyuanApp"):
                         ("inswapper_128", "face_swap"),
                         ("codeformer", "face_restore"),
                         ("realesrgan", "texture_components"),
-                        ("xatlas", "texture_components")
+                        ("xatlas", "texture_components"),
+                        ("dinov2", "texture_components")
                     ],
                     priority=2
                 )
@@ -140,3 +143,10 @@ def create_image_models_tab(app: "HunyuanApp"):
     with gr.Tab("🖼️ Image Models"):
         from ....config import IMAGE_MODELS
         create_model_category_section(app, "🖼️ Text-to-Image Models", IMAGE_MODELS, "image")
+
+
+def create_video_models_tab(app: "HunyuanApp"):
+    """Create video models download tab"""
+    with gr.Tab("🎬 Video Models"):
+        from ....config import VIDEO_MODELS
+        create_model_category_section(app, "🎬 Text-to-Video Models", VIDEO_MODELS, "video")

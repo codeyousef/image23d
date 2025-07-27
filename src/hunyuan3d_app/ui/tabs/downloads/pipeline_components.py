@@ -87,7 +87,7 @@ def create_texture_enhancement_section(app):
     gr.Markdown("#### 🎨 Texture Enhancement")
     
     for comp_name, comp_info in TEXTURE_PIPELINE_COMPONENTS.items():
-        if comp_info.get("type") == "model" and "texture" in comp_info.get("required_for", "").lower():
+        if comp_info.get("type") == "model":
             create_texture_component_card(app, comp_name, comp_info)
 
 
