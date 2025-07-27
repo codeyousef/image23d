@@ -26,6 +26,7 @@ class ModelsPage:
         self.model_manager = model_manager
         self.downloading_models: Dict[str, float] = {}  # model_id -> progress
         self.download_tasks: Dict[str, asyncio.Task] = {}
+        self.progress_cards: Dict[str, Any] = {}  # model_id -> UI elements
         
     def render(self):
         """Render the models page"""
@@ -464,13 +465,20 @@ class ModelsPage:
                     if is_downloading:
                         # Show download progress
                         progress = self.downloading_models.get(model_id, 0)
-                        with ui.column().classes('items-end'):
-                            ui.label(f'{progress:.0f}%').classes('text-sm')
-                            ui.linear_progress(progress / 100).classes('w-32')
+                        with ui.column().classes('items-end') as progress_col:
+                            progress_label = ui.label(f'{progress:.0f}%').classes('text-sm')
+                            progress_bar = ui.linear_progress(progress / 100).classes('w-32')
                             ui.button(
                                 'Cancel',
                                 on_click=lambda m=model_id: self._cancel_download(m)
                             ).props('flat dense size=sm color=negative')
+                            
+                            # Store references for updates
+                            self.progress_cards[model_id] = {
+                                'label': progress_label,
+                                'bar': progress_bar,
+                                'container': progress_col
+                            }
                     elif is_downloaded:
                         # Model is downloaded
                         with ui.row().classes('gap-2'):
@@ -557,33 +565,76 @@ class ModelsPage:
             # Add to downloading list
             self.downloading_models[model_id] = 0
             
-            # Simulate download progress (in real app, this would use HuggingFace Hub)
-            for i in range(101):
-                if model_id not in self.downloading_models:
-                    # Cancelled
-                    break
+            # Import required for actual download
+            try:
+                from src.hunyuan3d_app.models.download import download_model_with_progress
+                
+                # Use actual download function if available
+                async def progress_callback(progress: float):
+                    self.downloading_models[model_id] = progress * 100
+                    await self._update_progress_ui(model_id, progress * 100)
                     
-                self.downloading_models[model_id] = i
-                await asyncio.sleep(0.1)  # Simulate download time
+                success = await download_model_with_progress(
+                    model_type=model_type,
+                    model_id=model_id,
+                    repo_id=repo_id,
+                    progress_callback=progress_callback
+                )
                 
-                # Trigger UI update
-                if hasattr(self, 'update_trigger'):
-                    self.update_trigger.emit()
+                if success:
+                    await self._download_complete(model_id)
+                else:
+                    await self._download_failed(model_id, "Download failed")
                     
-            # Download complete
-            if model_id in self.downloading_models:
-                del self.downloading_models[model_id]
-                ui.notify(f'Downloaded: {model_id}', type='positive')
-                
-                # In real app, would trigger a refresh of the model list
-                
+            except ImportError:
+                # Fallback to simulation for demo
+                for i in range(101):
+                    if model_id not in self.downloading_models:
+                        # Cancelled
+                        break
+                        
+                    self.downloading_models[model_id] = i
+                    await self._update_progress_ui(model_id, i)
+                    await asyncio.sleep(0.1)  # Simulate download time
+                    
+                # Download complete
+                if model_id in self.downloading_models:
+                    await self._download_complete(model_id)
+                    
         except Exception as e:
-            ui.notify(f'Download failed: {str(e)}', type='negative')
-            if model_id in self.downloading_models:
-                del self.downloading_models[model_id]
+            await self._download_failed(model_id, str(e))
         finally:
             if model_id in self.download_tasks:
                 del self.download_tasks[model_id]
+            if model_id in self.progress_cards:
+                del self.progress_cards[model_id]
+                
+    async def _update_progress_ui(self, model_id: str, progress: float):
+        """Update progress UI elements"""
+        if model_id in self.progress_cards:
+            cards = self.progress_cards[model_id]
+            # Update within the UI context using NiceGUI's update mechanism
+            loop = asyncio.get_event_loop()
+            loop.call_soon_threadsafe(lambda: (
+                cards['label'].set_text(f'{progress:.0f}%'),
+                cards['bar'].set_value(progress / 100)
+            ))
+            
+    async def _download_complete(self, model_id: str):
+        """Handle download completion"""
+        if model_id in self.downloading_models:
+            del self.downloading_models[model_id]
+        # Create notification in a way that works with NiceGUI's async handling
+        loop = asyncio.get_event_loop()
+        loop.call_soon_threadsafe(lambda: ui.notify(f'Downloaded: {model_id}', type='positive'))
+        
+    async def _download_failed(self, model_id: str, error: str):
+        """Handle download failure"""
+        if model_id in self.downloading_models:
+            del self.downloading_models[model_id]
+        # Create notification in a way that works with NiceGUI's async handling  
+        loop = asyncio.get_event_loop()
+        loop.call_soon_threadsafe(lambda: ui.notify(f'Download failed: {error}', type='negative'))
                 
     def _cancel_download(self, model_id: str):
         """Cancel a download"""
