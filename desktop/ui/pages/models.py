@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from nicegui import ui
+import sys
+import os
+# Add project root to path to import from main app
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../../..'))
 import shutil
 
 logger = logging.getLogger(__name__)
@@ -91,7 +95,10 @@ class ModelsPage:
         
     def _render_image_models(self):
         """Render image models section"""
-        from core.config import FLUX_MODELS
+        try:
+            from core.config import FLUX_MODELS
+        except ImportError:
+            from src.hunyuan3d_app.config import IMAGE_MODELS as FLUX_MODELS
         
         with ui.column().classes('w-full gap-4'):
             # FLUX models
@@ -116,7 +123,10 @@ class ModelsPage:
                     
     def _render_3d_models(self):
         """Render 3D models section"""
-        from core.config import HUNYUAN3D_MODELS, SPARC3D_MODELS, HI3DGEN_MODELS
+        try:
+            from core.config import HUNYUAN3D_MODELS, SPARC3D_MODELS, HI3DGEN_MODELS
+        except ImportError:
+            from src.hunyuan3d_app.config import HUNYUAN3D_MODELS, SPARC3D_MODELS, HI3DGEN_MODELS
         
         with ui.column().classes('w-full gap-4'):
             # HunYuan3D Models
@@ -346,7 +356,10 @@ class ModelsPage:
                 
     def _render_video_models(self):
         """Render video models section"""
-        from core.config import VIDEO_MODELS
+        try:
+            from core.config import VIDEO_MODELS
+        except ImportError:
+            from src.hunyuan3d_app.config import VIDEO_MODELS
         
         with ui.column().classes('w-full gap-4'):
             ui.label('Text-to-Video Models').classes('text-lg font-semibold')

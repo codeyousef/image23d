@@ -433,3 +433,86 @@ LLM_CONFIG = {
     "temperature": 0.7,
     "max_tokens": 500
 }
+
+# Video Models Configuration
+VIDEO_MODELS = {
+    "wan2_1_1.3b": {
+        "name": "Wan2.1 1.3B",
+        "repo_id": "Wan-AI/Wan2.1-T2V-1.3B",
+        "size": "~2.6 GB",
+        "vram_required": "8GB+",
+        "description": "Consumer GPU friendly with visual text generation",
+        "max_frames": 129,
+        "fps": 24,
+        "features": ["visual_text", "multilingual", "flow_matching"]
+    },
+    "wan2_1_14b": {
+        "name": "Wan2.1 14B",
+        "repo_id": "Wan-AI/Wan2.1-T2V-14B",
+        "size": "~28 GB",
+        "vram_required": "16GB+",
+        "description": "Professional quality with 1080p support",
+        "max_frames": 129,
+        "fps": 24,
+        "features": ["visual_text", "multilingual", "1080p", "flow_matching"]
+    },
+    "hunyuanvideo": {
+        "name": "HunyuanVideo",
+        "repo_id": "tencent/HunyuanVideo",
+        "model_file": "hunyuanvideo_diffusion_pytorch_model.safetensors",
+        "size": "~50 GB",
+        "vram_required": "24GB+",
+        "description": "Cinema-quality with dual-stream architecture",
+        "max_frames": 129,
+        "fps": 24,
+        "features": ["dual_stream", "llama_encoder", "30fps", "cinema_quality"]
+    },
+    "ltxvideo": {
+        "name": "LTX-Video",
+        "repo_id": "Lightricks/LTX-Video",
+        "size": "~8 GB",
+        "vram_required": "12GB+",
+        "description": "Real-time generation (4s for 5s video)",
+        "max_frames": 121,
+        "fps": 30,
+        "features": ["real_time", "high_resolution", "artifact_reduction"]
+    },
+    "mochi_1": {
+        "name": "Mochi-1",
+        "repo_id": "genmo/mochi-1-preview",
+        "size": "~25 GB",
+        "vram_required": "24GB+",
+        "description": "10B model with smooth 30fps motion",
+        "max_frames": 163,
+        "fps": 30,
+        "features": ["asymmetric_dit", "128x_compression", "smooth_motion"]
+    },
+    "cogvideox_5b": {
+        "name": "CogVideoX-5B",
+        "repo_id": "THUDM/CogVideoX-5b",
+        "size": "~16 GB",
+        "vram_required": "16GB+",
+        "description": "Superior image-to-video specialist",
+        "max_frames": 49,
+        "fps": 8,
+        "features": ["i2v_specialist", "lora_support", "interpolation"]
+    },
+    "cogvideox": {
+        "name": "CogVideoX-2B",
+        "repo_id": "THUDM/CogVideoX-2b",
+        "size": "~10 GB",
+        "vram_required": "12GB+",
+        "description": "Efficient video generation model",
+        "max_frames": 49,
+        "fps": 8
+    },
+    "zeroscope": {
+        "name": "Zeroscope V2",
+        "repo_id": "cerspense/zeroscope_v2_576w",
+        "size": "~7 GB",
+        "vram_required": "10GB+",
+        "description": "Open-source text-to-video model",
+        "max_frames": 36,
+        "fps": 8
+    }
+}
