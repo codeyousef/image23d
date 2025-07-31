@@ -4,6 +4,7 @@ Handles generation-related async operations.
 """
 
 import asyncio
+import logging
 from typing import Dict, Any
 from pathlib import Path
 from nicegui import ui
@@ -21,6 +22,8 @@ try:
     from src.hunyuan3d_app.models.dependencies import DependencyChecker
 except ImportError:
     from hunyuan3d_app.models.dependencies import DependencyChecker
+
+logger = logging.getLogger(__name__)
 
 
 class GenerationHandlersMixin:
@@ -343,6 +346,7 @@ class GenerationHandlersMixin:
         
         # Queue the update for the main thread
         self._pipeline_update_queue.append((step, progress, message))
+        logger.info(f"Queued progress update: step={step}, progress={progress:.2f}, message='{message}' (queue size: {len(self._pipeline_update_queue)})")
     
     def _process_pipeline_updates(self):
         """Process queued pipeline updates in the main thread"""
@@ -350,6 +354,10 @@ class GenerationHandlersMixin:
         self._check_initialization_status()
         
         # Process all queued updates
+        queue_size = len(self._pipeline_update_queue)
+        if queue_size > 0:
+            logger.info(f"Processing {queue_size} queued pipeline updates")
+        
         while self._pipeline_update_queue:
             step, progress, message = self._pipeline_update_queue.pop(0)
             
@@ -375,7 +383,10 @@ class GenerationHandlersMixin:
             
             pipeline_step_id = step_id_mapping.get(step, None)
             if not pipeline_step_id:
+                logger.warning(f"Unknown progress step: '{step}' - ignoring update")
                 return  # Unknown step
+            
+            logger.info(f"Processing progress update: step='{step}' -> pipeline_step='{pipeline_step_id}', progress={progress_float:.2f}, message='{message}'")
             
             # Find the step index in our pipeline
             step_index = -1
@@ -396,14 +407,21 @@ class GenerationHandlersMixin:
             # Update progress within the current step with clean rounding
             if step_index == self.progress_pipeline.current_step_index:
                 # Extract sub-step name from message if applicable
-                sub_message = ""
+                sub_message = message or ""
                 if step in ['diffusion_sampling', 'volume_decoding', 'mesh_generation', 'texture_generation']:
-                    sub_message = step.replace('_', ' ').title()
-                elif message and any(keyword in message.lower() for keyword in ['diffusion', 'sampling', 'volume', 'decoding', 'mesh', 'texture']):
-                    sub_message = message
+                    # Use the step name as the sub-message if no message provided
+                    if not sub_message:
+                        sub_message = step.replace('_', ' ').title()
+                
+                logger.info(f"Updating step {step_index} progress: {progress_float:.2f}, message: '{sub_message}'")
                 
                 # Apply clean progress rounding and update
                 self.progress_pipeline.update_step_progress(progress_float, sub_message)
+            elif step_index < self.progress_pipeline.current_step_index:
+                # This is an update for a previous step - this can happen with async callbacks
+                logger.info(f"Ignoring update for previous step {step_index} (current: {self.progress_pipeline.current_step_index})")
+            else:
+                logger.info(f"Need to advance from step {self.progress_pipeline.current_step_index} to {step_index}")
             
             # If step is complete, ensure it's marked as finished
             if progress_float >= 1.0 and step_index == self.progress_pipeline.current_step_index:
