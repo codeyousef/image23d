@@ -17,6 +17,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../../..'))
 import shutil
 from nicegui import run
 
+# Import download manager
+try:
+    from src.hunyuan3d_app.models.download_manager import DownloadManager, DownloadTask, DownloadStatus
+except ImportError:
+    from hunyuan3d_app.models.download_manager import DownloadManager, DownloadTask, DownloadStatus
+
 logger = logging.getLogger(__name__)
 
 class ModelsPage:
@@ -32,6 +38,10 @@ class ModelsPage:
         self.download_states: Dict[str, Dict[str, Any]] = {}  # model_id -> {status, progress, speed, eta, model_type, repo_id}
         self.refreshable_cards: Dict[str, Any] = {}  # model_id -> refreshable function
         self.downloads_container = None  # Container for downloads list
+        self._ui_needs_update = False  # Flag for UI updates from background threads
+        
+        # Initialize download manager
+        self.download_manager = DownloadManager(models_dir)
         
     def render(self):
         """Render the models page"""
@@ -81,6 +91,31 @@ class ModelsPage:
                 # Downloads Tab
                 with ui.tab_panel(self.downloads_tab):
                     self._render_downloads_tab()
+            
+            # Add a timer to refresh model cards when needed
+            def refresh_cards_if_needed():
+                """Refresh model cards if downloads state has changed"""
+                if self._ui_needs_update and hasattr(self, 'refreshable_cards'):
+                    self._ui_needs_update = False
+                    # Refresh cards for models that are downloading
+                    for model_id in list(self.download_states.keys()):
+                        if model_id in self.refreshable_cards and callable(self.refreshable_cards[model_id]):
+                            try:
+                                self.refreshable_cards[model_id].refresh()
+                            except Exception as e:
+                                logger.debug(f"Failed to refresh card {model_id}: {e}")
+                # Also refresh if there are active downloads even without the flag
+                elif hasattr(self, 'refreshable_cards') and self.download_states:
+                    for model_id in list(self.download_states.keys()):
+                        status = self.download_states[model_id].get('status')
+                        if status in ['starting', 'downloading']:
+                            if model_id in self.refreshable_cards and callable(self.refreshable_cards[model_id]):
+                                try:
+                                    self.refreshable_cards[model_id].refresh()
+                                except Exception as e:
+                                    logger.debug(f"Failed to refresh active download card {model_id}: {e}")
+                                
+            ui.timer(0.5, refresh_cards_if_needed)
                     
     def _get_storage_stats(self) -> Dict[str, Any]:
         """Get storage statistics"""
@@ -117,7 +152,7 @@ class ModelsPage:
             ui.label('State-of-the-art text-to-image generation with enhanced features').classes('text-sm text-gray-400 mb-2')
             
             for model_id, config in FLUX_MODELS.items():
-                self._render_model_card(
+                self._create_model_card_wrapper(
                     model_id=model_id,
                     name=config['name'],
                     description=config['description'],
@@ -145,7 +180,7 @@ class ModelsPage:
             ui.label('State-of-the-art text/image to 3D generation').classes('text-sm text-gray-400 mb-2')
             
             for model_id, config in HUNYUAN3D_MODELS.items():
-                self._render_model_card(
+                self._create_model_card_wrapper(
                     model_id=model_id,
                     name=config["name"],
                     description=config["description"],
@@ -162,7 +197,7 @@ class ModelsPage:
                 ui.label('Ultra high-resolution 3D reconstruction with sparse representation').classes('text-sm text-gray-400 mb-2')
                 
                 for model_id, config in SPARC3D_MODELS.items():
-                    self._render_model_card(
+                    self._create_model_card_wrapper(
                         model_id=model_id,
                         name=config["name"],
                         description=config["description"],
@@ -180,7 +215,7 @@ class ModelsPage:
                 ui.label('High-fidelity 3D geometry via normal map bridging').classes('text-sm text-gray-400 mb-2')
                 
                 for model_id, config in HI3DGEN_MODELS.items():
-                    self._render_model_card(
+                    self._create_model_card_wrapper(
                         model_id=model_id,
                         name=config["name"],
                         description=config["description"],
@@ -234,7 +269,7 @@ class ModelsPage:
             ]
             
             for model in controlnet_models:
-                self._render_model_card(
+                self._create_model_card_wrapper(
                     model_id=model['id'],
                     name=model['name'],
                     description=model['description'],
@@ -277,7 +312,7 @@ class ModelsPage:
             ]
             
             for model in depth_models:
-                self._render_model_card(
+                self._create_model_card_wrapper(
                     model_id=model['id'],
                     name=model['name'],
                     description=model['description'],
@@ -312,7 +347,7 @@ class ModelsPage:
             ]
             
             for model in preprocessing_models:
-                self._render_model_card(
+                self._create_model_card_wrapper(
                     model_id=model['id'],
                     name=model['name'],
                     description=model['description'],
@@ -355,7 +390,7 @@ class ModelsPage:
             ]
             
             for model in texture_models:
-                self._render_model_card(
+                self._create_model_card_wrapper(
                     model_id=model['id'],
                     name=model['name'],
                     description=model['description'],
@@ -377,7 +412,7 @@ class ModelsPage:
             ui.label('State-of-the-art video generation models').classes('text-sm text-gray-400 mb-2')
             
             for model_id, config in VIDEO_MODELS.items():
-                self._render_model_card(
+                self._create_model_card_wrapper(
                     model_id=model_id,
                     name=config['name'],
                     description=config['description'],
@@ -417,7 +452,34 @@ class ModelsPage:
                     'based on available VRAM and quality requirements.'
                 ).classes('text-sm text-gray-400')
                 
-    @ui.refreshable
+    def _create_model_card_wrapper(self, model_id: str, name: str, description: str,
+                                  size: str, vram_required: str, repo_id: str,
+                                  model_type: str, is_gguf: bool = False, is_experimental: bool = False):
+        """Create a refreshable model card wrapper"""
+        # Initialize refreshable cards dict if needed
+        if not hasattr(self, 'refreshable_cards'):
+            self.refreshable_cards = {}
+            
+        @ui.refreshable
+        def card():
+            self._render_model_card(
+                model_id=model_id,
+                name=name,
+                description=description,
+                size=size,
+                vram_required=vram_required,
+                repo_id=repo_id,
+                model_type=model_type,
+                is_gguf=is_gguf,
+                is_experimental=is_experimental
+            )
+        
+        # Store the refreshable function itself, not the result
+        self.refreshable_cards[model_id] = card
+        
+        # Render the card and return the container
+        return card()
+                
     def _render_model_card(self, model_id: str, name: str, description: str, 
                            size: str, vram_required: str, repo_id: str, 
                            model_type: str, is_gguf: bool = False, is_experimental: bool = False):
@@ -477,7 +539,18 @@ class ModelsPage:
                         # Show download progress
                         progress = self.downloading_models.get(model_id, 0)
                         with ui.column().classes('items-end') as progress_col:
-                            progress_label = ui.label(f'{progress:.0f}%').classes('text-sm')
+                            # Check if we have file-based progress
+                            task = self.download_manager.get_task(model_id)
+                            if task and task.total_files > 0:
+                                # Show both file progress and percentage
+                                current_file = task.current_file_index if task.current_file_index > 0 else 1
+                                if task.completed_files < task.total_files:
+                                    progress_label = ui.label(f'File {current_file}/{task.total_files} - {progress:.0f}%').classes('text-sm')
+                                else:
+                                    progress_label = ui.label(f'{task.total_files}/{task.total_files} files - 100%').classes('text-sm')
+                            else:
+                                # Percentage-based progress only
+                                progress_label = ui.label(f'{progress:.0f}%').classes('text-sm')
                             progress_bar = ui.linear_progress(progress / 100).classes('w-32')
                             ui.button(
                                 'Cancel',
@@ -511,11 +584,20 @@ class ModelsPage:
                             ).props('flat dense')
                     else:
                         # Model not downloaded
-                        ui.button(
-                            'Download',
-                            icon='download',
-                            on_click=lambda m=model_id, t=model_type, r=repo_id: self.start_download(m, t, r)
-                        ).props('unelevated dense').style('background-color: #7C3AED')
+                        # Check if it's empty (downloaded but files missing)
+                        if is_empty:
+                            download_btn = ui.button(
+                                'Re-download',
+                                icon='refresh'
+                            ).props('unelevated dense').style('background-color: #FF6B6B')
+                        else:
+                            download_btn = ui.button(
+                                'Download',
+                                icon='download'
+                            ).props('unelevated dense').style('background-color: #7C3AED')
+                        
+                        # Use closure to capture current values
+                        download_btn.on('click', lambda e, m=model_id, t=model_type, r=repo_id: self.start_download(m, t, r))
                         
     def _check_model_downloaded(self, model_id: str, model_type: str) -> bool:
         """Check if a model is downloaded"""
@@ -525,6 +607,36 @@ class ModelsPage:
                 return self.model_manager.is_model_available(model_id)
         except Exception as e:
             logger.debug(f"Model manager check failed for {model_id}, falling back to filesystem check: {e}")
+            
+            # Import component info
+            try:
+                from src.hunyuan3d_app.models.dependencies import COMPONENT_PATTERNS
+            except ImportError:
+                from hunyuan3d_app.models.dependencies import COMPONENT_PATTERNS
+            
+            # Check if it's a component
+            if model_id in COMPONENT_PATTERNS:
+                # Components can be in various locations
+                possible_paths = [
+                    self.models_dir / 'components' / model_id,
+                    self.models_dir / 'pipeline' / model_id,
+                    self.models_dir / model_type / model_id,
+                    self.models_dir / 'texture' / model_id,
+                    self.models_dir / 'preprocessing' / model_id,
+                    self.models_dir / 'controlnet' / model_id,
+                    self.models_dir / 'depth' / model_id,
+                ]
+                
+                # Also check inside 3D model directories for HunYuan3D components
+                if model_id.startswith('hunyuan3d-'):
+                    for model_dir in (self.models_dir / '3d').iterdir() if (self.models_dir / '3d').exists() else []:
+                        if model_dir.is_dir():
+                            possible_paths.append(model_dir / model_id)
+                
+                for path in possible_paths:
+                    if path.exists() and any(path.iterdir()):
+                        return True
+                return False
             
             # Fallback to filesystem check with improved logic
             if model_type == 'image':
@@ -546,7 +658,11 @@ class ModelsPage:
                 if model_path.exists():
                     # Check for HunYuan3D specific structure
                     expected_dirs = ['hunyuan3d-dit-v2-1', 'hunyuan3d-vae-v2-1', 'hunyuan3d-paintpbr-v2-1']
-                    return any((model_path / d).exists() for d in expected_dirs)
+                    if any((model_path / d).exists() for d in expected_dirs):
+                        return True
+                    # Also check for generic 3D model files
+                    if any(model_path.glob('*.ckpt')) or any(model_path.glob('*.safetensors')):
+                        return True
                 return False
             else:
                 # Generic check for other model types
@@ -570,12 +686,22 @@ class ModelsPage:
             'repo_id': repo_id
         }
         
-        # Refresh the model card to show download progress
-        # Force a page refresh to update the UI
-        ui.run_javascript('window.location.reload()')
+        # Show notification
+        ui.notify(f'Starting download: {model_id}', type='info')
         
-        # Start the actual async download
-        asyncio.create_task(self._download_model(model_id, model_type, repo_id))
+        # Mark UI needs update and force immediate refresh
+        self._ui_needs_update = True
+        
+        # Try to refresh the card immediately
+        if hasattr(self, 'refreshable_cards') and model_id in self.refreshable_cards:
+            if callable(self.refreshable_cards[model_id]):
+                try:
+                    self.refreshable_cards[model_id].refresh()
+                except Exception as e:
+                    logger.error(f"Failed to refresh card immediately: {e}")
+        
+        # Start the actual async download using the correct method
+        asyncio.create_task(self._download_model_async(model_id, model_type, repo_id))
         
     async def _download_model(self, model_id: str, model_type: str, repo_id: str):
         """Async download handler"""
@@ -595,57 +721,114 @@ class ModelsPage:
         # Update status
         self.download_states[model_id]['status'] = 'downloading'
         
-        # Create download task using run.io_bound for proper context
-        task = run.io_bound(self._download_model_async, model_id, model_type, repo_id)
-        self.download_tasks[model_id] = task
+        # Create download task using asyncio.create_task
+        logger.info(f"Creating async task for {model_id}")
+        try:
+            # Ensure we're in an async context
+            loop = asyncio.get_event_loop()
+            task = asyncio.create_task(self._download_model_async(model_id, model_type, repo_id))
+            self.download_tasks[model_id] = task
+            logger.info(f"Async task created successfully for {model_id}")
+        except Exception as e:
+            logger.error(f"Failed to create async task for {model_id}: {e}")
+            # Try alternative approach
+            asyncio.ensure_future(self._download_model_async(model_id, model_type, repo_id))
         
     async def _download_model_async(self, model_id: str, model_type: str, repo_id: str):
         """Async model download with progress"""
+        logger.info(f"Starting async download for {model_id} from {repo_id}")
         try:
             # Update download state
             self.download_states[model_id]['status'] = 'downloading'
+            self._ui_needs_update = True
             
-            # Import required for actual download
+            # Determine download patterns based on model type and component info
+            allow_patterns = None
+            subfolder = None
+            
+            # Import component patterns
             try:
-                from src.hunyuan3d_app.models.download import download_model_with_progress
-                
-                # Use actual download function if available
-                async def progress_callback(progress: float):
-                    self.downloading_models[model_id] = progress * 100
-                    self.download_states[model_id]['progress'] = progress * 100
-                    await self._update_progress_ui(model_id, progress * 100)
-                    
-                success = await download_model_with_progress(
-                    model_type=model_type,
-                    model_id=model_id,
-                    repo_id=repo_id,
-                    progress_callback=progress_callback
-                )
-                
-                if success:
-                    await self._download_complete(model_id)
-                else:
-                    await self._download_failed(model_id, "Download failed")
-                    
+                from src.hunyuan3d_app.models.dependencies import COMPONENT_PATTERNS
             except ImportError:
-                # Fallback to simulation for demo
-                for i in range(101):
-                    if model_id not in self.downloading_models:
-                        # Cancelled
-                        break
-                        
-                    self.downloading_models[model_id] = i
-                    self.download_states[model_id]['progress'] = i
-                    # Simulate speed and ETA
-                    if i > 0:
-                        self.download_states[model_id]['speed'] = 10.5  # MB/s
-                        self.download_states[model_id]['eta'] = f'{(100-i)*0.1:.0f}s'
-                    await self._update_progress_ui(model_id, i)
-                    await asyncio.sleep(0.1)  # Simulate download time
+                from hunyuan3d_app.models.dependencies import COMPONENT_PATTERNS
+            
+            # Check if this is a component download
+            if model_id in COMPONENT_PATTERNS:
+                component_info = COMPONENT_PATTERNS[model_id]
+                allow_patterns = component_info.get('patterns', [])
+                # Override repo_id if component has its own
+                if 'repo_id' in component_info and component_info['repo_id'] != repo_id:
+                    repo_id = component_info['repo_id']
+            elif model_type == '3d':
+                # HunYuan3D models have specific structure
+                if 'hunyuan3d' in model_id:
+                    # Download all components for HunYuan3D
+                    allow_patterns = [
+                        'hunyuan3d-dit-v*/**/*',
+                        'hunyuan3d-vae-v*/**/*', 
+                        'hunyuan3d-paintpbr-v*/**/*',
+                        '*.yaml', '*.json', '*.txt'
+                    ]
+                else:
+                    # Generic 3D model patterns
+                    allow_patterns = ['*.ckpt', '*.safetensors', '*.bin', '*.pth', '*.pt', 
+                                     '*.yaml', '*.json', 'config.json', 'model_index.json']
+            elif model_type == 'image':
+                # FLUX models
+                allow_patterns = ['*.safetensors', '*.bin', '*.json', 'model_index.json', 
+                                 'transformer/**/*', 'vae/**/*', 'text_encoder/**/*', 'tokenizer/**/*']
+            elif model_type == 'video':
+                # Video models
+                allow_patterns = ['*.safetensors', '*.bin', '*.ckpt', '*.json', 'model_index.json']
+            elif model_type in ['controlnet', 'depth', 'preprocessing', 'texture']:
+                # Component models
+                allow_patterns = ['*.safetensors', '*.bin', '*.onnx', '*.pth', '*.json', 'config.json']
+            
+            # Add progress callback
+            def progress_callback(task: DownloadTask):
+                """Update download progress (called from background thread)"""
+                # Only update data, don't touch UI from background thread
+                # Round progress to integer but never round up to 100% unless actually complete
+                raw_progress = task.progress * 100
+                if raw_progress >= 99.5 and task.status != DownloadStatus.COMPLETED:
+                    # Cap at 99% if not actually completed to avoid false 100%
+                    progress_percent = 99
+                else:
+                    progress_percent = round(raw_progress)
                     
-                # Download complete
-                if model_id in self.downloading_models:
-                    await self._download_complete(model_id)
+                logger.debug(f"Progress callback: task.progress={task.progress:.3f}, raw={raw_progress:.1f}, final={progress_percent}")
+                self.downloading_models[model_id] = progress_percent
+                self.download_states[model_id].update({
+                    'status': task.status.value,
+                    'progress': progress_percent,
+                    'speed': task.speed,
+                    'eta': task.eta_formatted,
+                    'error': task.error
+                })
+                
+                # Mark that UI needs update
+                self._ui_needs_update = True
+                    
+            # Register progress callback
+            self.download_manager.add_progress_callback(model_id, progress_callback)
+            
+            # Start actual download
+            logger.info(f"Calling download_manager.download_model for {model_id}")
+            logger.info(f"Parameters: model_type={model_type}, repo_id={repo_id}, allow_patterns={allow_patterns}")
+            success = await self.download_manager.download_model(
+                model_type=model_type,
+                model_id=model_id,
+                repo_id=repo_id,
+                allow_patterns=allow_patterns
+            )
+            logger.info(f"Download manager returned success={success} for {model_id}")
+            
+            if success:
+                await self._download_complete(model_id)
+            else:
+                task = self.download_manager.get_task(model_id)
+                error_msg = task.error if task else "Download failed"
+                await self._download_failed(model_id, error_msg)
                     
         except Exception as e:
             await self._download_failed(model_id, str(e))
@@ -656,22 +839,64 @@ class ModelsPage:
                 del self.progress_cards[model_id]
                 
     async def _update_progress_ui(self, model_id: str, progress: float):
-        """Update progress UI elements"""
-        if model_id in self.progress_cards:
-            cards = self.progress_cards[model_id]
-            # Update UI elements directly - they will update on next refresh
-            cards['label'].text = f'{progress:.0f}%'
-            cards['bar'].value = progress / 100
+        """Update progress UI elements - deprecated, using flag-based updates instead"""
+        # This method is no longer used - UI updates happen through the timer
+        pass
             
     async def _download_complete(self, model_id: str):
         """Handle download completion"""
         if model_id in self.downloading_models:
             del self.downloading_models[model_id]
         if model_id in self.download_states:
-            self.download_states[model_id]['status'] = 'completed'
-            self.download_states[model_id]['progress'] = 100
-        # We'll show notification through UI refresh instead
+            del self.download_states[model_id]  # Remove from download states completely
+        
+        # Mark UI needs update and force immediate refresh
+        self._ui_needs_update = True
+        
+        # Force immediate card refresh to show download completion
+        if hasattr(self, 'refreshable_cards') and model_id in self.refreshable_cards:
+            if callable(self.refreshable_cards[model_id]):
+                try:
+                    self.refreshable_cards[model_id].refresh()
+                except Exception as e:
+                    logger.error(f"Failed to refresh card after completion: {e}")
+        
+        # Also refresh the dependency checking system
+        try:
+            # Force refresh of dependency detection for newly downloaded model
+            if hasattr(self, 'dependency_manager'):
+                await asyncio.sleep(0.1)  # Small delay to ensure files are written
+                # Clear any cached dependency results
+                if hasattr(self.dependency_manager, '_cache'):
+                    self.dependency_manager._cache.clear()
+                
+            # If this was a component model, refresh all cards that might depend on it
+            if model_id in ['dinov2-giant', 'realesrgan-x4'] or model_id.startswith('hunyuan3d-'):
+                logger.info(f"Component {model_id} downloaded, refreshing dependent model cards")
+                # Force refresh of all cards since components affect multiple models
+                self._ui_needs_update = True
+                
+        except Exception as e:
+            logger.debug(f"Could not refresh dependency manager: {e}")
+        
         logger.info(f'Download complete: {model_id}')
+        ui.notify(f'Download complete: {model_id}', type='positive')
+        
+        # Schedule additional refreshes to ensure UI updates
+        async def delayed_refresh():
+            await asyncio.sleep(0.5)  # Wait for file system to stabilize
+            self._ui_needs_update = True
+            # Refresh all cards that might be affected
+            if hasattr(self, 'refreshable_cards'):
+                for card_id, card_refresh in self.refreshable_cards.items():
+                    if callable(card_refresh):
+                        try:
+                            card_refresh.refresh()
+                        except Exception as e:
+                            logger.debug(f"Could not refresh card {card_id}: {e}")
+        
+        # Run delayed refresh
+        asyncio.create_task(delayed_refresh())
         
     async def _download_failed(self, model_id: str, error: str):
         """Handle download failure"""
@@ -680,11 +905,15 @@ class ModelsPage:
         if model_id in self.download_states:
             self.download_states[model_id]['status'] = 'failed'
             self.download_states[model_id]['error'] = error
-        # Log error instead of trying to notify from async context
+        # Mark UI needs update
+        self._ui_needs_update = True
         logger.error(f'Download failed for {model_id}: {error}')
                 
     def _cancel_download(self, model_id: str):
         """Cancel a download"""
+        # Cancel via download manager
+        self.download_manager.cancel_download(model_id)
+        
         if model_id in self.download_tasks:
             self.download_tasks[model_id].cancel()
             
@@ -696,8 +925,8 @@ class ModelsPage:
             
         ui.notify(f'Cancelled download: {model_id}', type='info')
         
-        # Refresh UI
-        ui.run_javascript('window.location.reload()')
+        # Mark UI needs update
+        self._ui_needs_update = True
         
     def _delete_model(self, model_id: str, model_type: str):
         """Delete a model with confirmation"""
@@ -730,7 +959,16 @@ class ModelsPage:
                 self._update_downloads_list()
                 
             # Auto-refresh downloads list
-            ui.timer(1.0, self._update_downloads_list)
+            def check_and_update():
+                """Check if UI needs update and refresh if needed"""
+                if self._ui_needs_update:
+                    self._ui_needs_update = False
+                    self._update_downloads_list()
+                # Also update if there are active downloads
+                elif any(d.get('status') in ['downloading', 'starting'] for d in self.download_states.values()):
+                    self._update_downloads_list()
+                    
+            ui.timer(0.5, check_and_update)
             
     def _update_downloads_list(self):
         """Update the downloads list UI"""
@@ -774,7 +1012,20 @@ class ModelsPage:
                     ui.linear_progress(progress / 100).classes('w-full mt-2')
                     
                     with ui.row().classes('gap-4 mt-1'):
-                        ui.label(f'{progress:.0f}%').classes('text-sm')
+                        # Check if we have file-based progress
+                        task = self.download_manager.get_task(model_id)
+                        if task and task.total_files > 0:
+                            # Show detailed file progress
+                            current_file = task.current_file_index if task.current_file_index > 0 else 1
+                            if task.completed_files < task.total_files:
+                                ui.label(f'File {current_file}/{task.total_files}').classes('text-sm')
+                                ui.label(f'{progress:.0f}%').classes('text-sm font-semibold')
+                            else:
+                                ui.label(f'{task.total_files}/{task.total_files} files').classes('text-sm')
+                                ui.label('100%').classes('text-sm font-semibold')
+                        else:
+                            # Percentage-based progress only
+                            ui.label(f'{progress:.0f}%').classes('text-sm font-semibold')
                         if state.get('speed'):
                             ui.label(f'{state["speed"]:.1f} MB/s').classes('text-sm text-gray-400')
                         if state.get('eta'):
@@ -818,17 +1069,23 @@ class ModelsPage:
                         
     def _pause_download(self, model_id: str):
         """Pause a download"""
+        # Pause via download manager
+        self.download_manager.pause_download(model_id)
+        
         if model_id in self.download_states:
             self.download_states[model_id]['status'] = 'paused'
-            # TODO: Implement actual pause logic
             ui.notify(f'Paused download: {model_id}', type='info')
             
-    def _resume_download(self, model_id: str):
+    async def _resume_download(self, model_id: str):
         """Resume a paused download"""
         if model_id in self.download_states:
-            self.download_states[model_id]['status'] = 'downloading'
-            # TODO: Implement actual resume logic
-            ui.notify(f'Resumed download: {model_id}', type='info')
+            # Resume via download manager
+            success = await self.download_manager.resume_download(model_id)
+            if success:
+                self.download_states[model_id]['status'] = 'downloading'
+                ui.notify(f'Resumed download: {model_id}', type='info')
+            else:
+                ui.notify(f'Failed to resume download: {model_id}', type='negative')
             
     def _retry_download(self, model_id: str):
         """Retry a failed download"""
@@ -847,7 +1104,20 @@ class ModelsPage:
         if model_id in self.downloading_models and model_id in self.progress_cards:
             progress = self.downloading_models[model_id]
             cards = self.progress_cards[model_id]
-            cards['label'].text = f'{progress:.0f}%'
+            
+            # Check if we have file-based progress
+            task = self.download_manager.get_task(model_id)
+            if task and task.total_files > 0:
+                # Show both file progress and percentage
+                current_file = task.current_file_index if task.current_file_index > 0 else 1
+                if task.completed_files < task.total_files:
+                    cards['label'].text = f'File {current_file}/{task.total_files} - {progress:.0f}%'
+                else:
+                    cards['label'].text = f'{task.total_files}/{task.total_files} files - 100%'
+            else:
+                # Percentage-based progress only
+                cards['label'].text = f'{progress:.0f}%'
+            
             cards['bar'].value = progress / 100
         else:
             # Download complete or cancelled - stop timer
@@ -936,3 +1206,14 @@ class ModelsPage:
                                 ui.label(f'{file.name} ({size_mb:.1f} MB)').classes('text-xs font-mono')
                                 
         dialog.open()
+        
+    def _refresh_model_card(self, model_id: str):
+        """Refresh a specific model card if it exists"""
+        if hasattr(self, 'refreshable_cards') and model_id in self.refreshable_cards:
+            try:
+                if callable(self.refreshable_cards[model_id]):
+                    self.refreshable_cards[model_id].refresh()
+                else:
+                    logger.warning(f"Refreshable card for {model_id} is not callable")
+            except Exception as e:
+                logger.warning(f"Failed to refresh model card {model_id}: {e}")

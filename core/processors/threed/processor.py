@@ -171,17 +171,29 @@ class ThreeDProcessor:
         generator = get_3d_generator()
         
         # Create progress wrapper to adapt progress callback format
-        def wrapped_progress_callback(progress_percent, message):
+        def wrapped_progress_callback(*args):
             if progress_callback:
-                # Map progress to appropriate step
-                if progress_percent < 30:
-                    progress_callback("load_model", 0.1 + progress_percent * 0.002, message)
-                elif progress_percent < 60:
-                    progress_callback("generate", 0.2 + (progress_percent - 30) * 0.015, message)
-                elif progress_percent < 90:
-                    progress_callback("postprocess", 0.65 + (progress_percent - 60) * 0.01, message)
+                # Handle both 2-arg and 3-arg callback signatures
+                if len(args) == 2:
+                    # Old format: (progress_percent, message)
+                    progress_percent, message = args
+                    # Map progress to appropriate step
+                    if progress_percent < 30:
+                        progress_callback("load_model", 0.1 + progress_percent * 0.002, message)
+                    elif progress_percent < 60:
+                        progress_callback("generate", 0.2 + (progress_percent - 30) * 0.015, message)
+                    elif progress_percent < 90:
+                        progress_callback("postprocess", 0.65 + (progress_percent - 60) * 0.01, message)
+                    else:
+                        progress_callback("save", 0.95 + (progress_percent - 90) * 0.005, message)
+                elif len(args) == 3:
+                    # New format: (step, progress, message)
+                    step, progress, message = args
+                    # Direct pass-through for step-based callbacks
+                    progress_callback(step, progress, message)
                 else:
-                    progress_callback("save", 0.95 + (progress_percent - 90) * 0.005, message)
+                    # Fallback for unexpected formats
+                    logger.warning(f"Unexpected progress callback args: {args}")
         
         # Determine input for generation
         if input_image:
@@ -253,8 +265,30 @@ class ThreeDProcessor:
         preview_images = []
         if "preview_image" in result and result["preview_image"]:
             preview_path = output_subdir / "preview.png"
-            result["preview_image"].save(preview_path)
-            preview_images.append(preview_path)
+            # Handle both PIL Image and path cases
+            preview_img = result["preview_image"]
+            if hasattr(preview_img, 'save'):  # PIL Image
+                preview_img.save(preview_path)
+                preview_images.append(preview_path)
+                logger.info(f"Saved preview image to {preview_path}")
+            elif isinstance(preview_img, (str, Path)) and Path(preview_img).exists():  # Path
+                import shutil
+                shutil.copy2(preview_img, preview_path)
+                preview_images.append(preview_path)
+                logger.info(f"Copied preview image to {preview_path}")
+            else:
+                logger.warning(f"Invalid preview image type: {type(preview_img)}")
+        
+        # Also check for generated_images which might contain multiple preview views
+        if "generated_images" in result and result["generated_images"]:
+            for i, img in enumerate(result["generated_images"][:4]):  # Max 4 preview images
+                if hasattr(img, 'save'):  # PIL Image
+                    preview_path = output_subdir / f"preview_{i}.png"
+                    img.save(preview_path)
+                    preview_images.append(preview_path)
+                    logger.info(f"Saved generated image {i} to {preview_path}")
+        
+        logger.info(f"Total preview images saved: {len(preview_images)}")
         
         # Handle export formats
         export_paths = {}

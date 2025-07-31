@@ -919,6 +919,25 @@ wheels = [
 ]
 
 [[package]]
+name = "fast-simplification"
+version = "0.1.11"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/78/98/1e10c12ac539826e81902952175961f2717f188b1e2276949e687a88c91c/fast_simplification-0.1.11.tar.gz", hash = "sha256:deba1bd719b372e375ed38cbfcc47d98e9e3e41405c470d10efdae3a2b676d3d", size = 26334 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ca/88/6860b0ec19d551ca4daf39706b8848a5e5a71d76b6c54ab9748b86b7139c/fast_simplification-0.1.11-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:f1f8fe71c819e956e726ec0dc967c324793d970a16729c863cc2d95a762a2550", size = 263144 },
+    { url = "https://files.pythonhosted.org/packages/15/84/f5d5c82ef5d3ce347cf400b96b86a64adc948c309c8bf126b304996e11c3/fast_simplification-0.1.11-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:094f4c87632cb73916e13ef9c8b84e4e290eb03f14b5317e7ec0fd19a4e7ae3d", size = 241390 },
+    { url = "https://files.pythonhosted.org/packages/a6/ac/c27ed09fa2a55a7d729c2b2e41c49b73f0732ebf26943e671396ed274524/fast_simplification-0.1.11-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:71c316e0a6cdbc524abb8322b351e37c0ac317855e55ea8c8b0e1d8f1e31080f", size = 1693701 },
+    { url = "https://files.pythonhosted.org/packages/1b/f8/1aa54340ca622200af0ef144b344c4ff41164bc9031be87bb5b2e45193de/fast_simplification-0.1.11-cp310-cp310-win_amd64.whl", hash = "sha256:2eef3888dc0f210540d6a2761b82b3670556250a953bd137b4bffecd0063bcc7", size = 212328 },
+    { url = "https://files.pythonhosted.org/packages/c8/84/79d7656eb7d10249accdc66790acfbb2b84462d68067d4bae375370f1c03/fast_simplification-0.1.11-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:db1fd0784c7e65ff106025099ac6ca8f3ad81ca809f0fd50493faef76e6a0bdf", size = 263616 },
+    { url = "https://files.pythonhosted.org/packages/77/98/ecafccfd96aa75c03e1167907b8443f264895224bd205e521085e72e2a42/fast_simplification-0.1.11-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:3d012ca880437478e85b7a7a8c675abfc3946e4c6fde6831f4a98a21332300de", size = 241774 },
+    { url = "https://files.pythonhosted.org/packages/48/19/acb1982d354f68a27a2c54f3e34b3adae673171459de21f23216439a8480/fast_simplification-0.1.11-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:dbfe102f7d8afb542475f8a421dfb3ff2c75584ba7c1c394569afe3af9b7576a", size = 1776877 },
+    { url = "https://files.pythonhosted.org/packages/3a/ed/f12f72674fc3be7624d464e6cfe6f9591abc007bedecf48ac46f414a7e64/fast_simplification-0.1.11-cp311-cp311-win_amd64.whl", hash = "sha256:bad29ded2b35eb29f57bb221978580f762f79efdee4d9267fd55f4ff1b70f553", size = 212434 },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.115.14"
 source = { registry = "https://pypi.org/simple" }
@@ -1398,6 +1417,7 @@ dependencies = [
     { name = "cryptography" },
     { name = "diffusers" },
     { name = "einops" },
+    { name = "fast-simplification" },
     { name = "gfpgan" },
     { name = "gguf" },
     { name = "gputil" },
@@ -1497,6 +1517,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=41.0.0" },
     { name = "diffusers", specifier = ">=0.32.0" },
     { name = "einops", specifier = ">=0.7.0" },
+    { name = "fast-simplification", specifier = ">=0.1.0" },
     { name = "flash-attn", marker = "sys_platform == 'linux' and extra == 'cuda118'", specifier = ">=2.0.0" },
     { name = "flash-attn", marker = "sys_platform == 'linux' and extra == 'cuda121'", specifier = ">=2.5.0" },
     { name = "flash-attn", marker = "sys_platform == 'linux' and extra == 'linux'", specifier = ">=2.5.0" },

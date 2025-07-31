@@ -73,8 +73,8 @@ class CreatePage(
         self.enhancement_panel = EnhancementPanel(on_change=self._on_enhancement_change)
         self.progress_pipeline = ProgressPipeline()
         
-        # State
-        self.current_mode = "image"
+        # State - start with 3D since we have 3D models
+        self.current_mode = "3d"
         self.generation_task: Optional[asyncio.Task] = None
         self._uploaded_image_path = None
         

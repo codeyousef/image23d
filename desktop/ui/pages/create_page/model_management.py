@@ -63,7 +63,8 @@ class ModelManagementMixin:
                     else:
                         model_folder = '3d'
                     
-                    is_downloaded = self._check_model_downloaded(model_id, model_folder)
+                    # For 3D models, always check in the 3d folder
+                    is_downloaded = self._check_model_downloaded(model_id, '3d')
                     label = f"{info['name']} {'✓' if is_downloaded else '⬇'}"
                     if not is_downloaded:
                         label += " (not downloaded)"
@@ -74,8 +75,13 @@ class ModelManagementMixin:
                     self.model_select.options = options
                     # Select first downloaded model if available
                     downloaded = [k for k, v in options.items() if '✓' in v]
+                    # Found 3D models
                     if downloaded and not self.model_select.value:
                         self.model_select.value = downloaded[0]
+                        # Select the first downloaded model
+                        # Trigger dependency check when model is selected
+                        if hasattr(self, '_update_dependency_status'):
+                            self._update_dependency_status()
                 
                 # Also update image model select for text-to-3D
                 if hasattr(self, 'image_model_select') and self.image_model_select:
@@ -100,6 +106,8 @@ class ModelManagementMixin:
     
     def _on_model_select_change(self, e):
         """Handle model selection change"""
+        # Model selection changed
+        
         if e.value and ' (not downloaded)' in self.model_select.options.get(e.value, ''):
             # Model not downloaded, show warning
             ui.notify(
@@ -111,8 +119,19 @@ class ModelManagementMixin:
             
             # Disable generate button for non-downloaded models
             if self.generate_button:
-                self.generate_button.props('disable')
+                self.generate_button.disable()
+                if self.generate_button.text != 'Generate':
+                    self.generate_button.text = 'Generate'
+                    self.generate_button.update()
         else:
-            # Enable generate button for downloaded models
-            if self.generate_button:
-                self.generate_button.props(remove='disable')
+            # For downloaded models, check dependencies first
+            if hasattr(self, '_update_dependency_status'):
+                # Update dependency status which will enable/disable the button
+                self._update_dependency_status()
+            else:
+                # Fallback to enable if no dependency check available
+                if self.generate_button:
+                    self.generate_button.enable()
+                    if self.generate_button.text != 'Generate':
+                        self.generate_button.text = 'Generate'
+                        self.generate_button.update()

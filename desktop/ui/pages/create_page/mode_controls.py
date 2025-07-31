@@ -185,13 +185,17 @@ class ModeControlsMixin:
         # Re-render mode controls
         self._render_mode_controls()
         
+        # Update dependency status
+        if hasattr(self, '_update_dependency_status'):
+            self._update_dependency_status()
+        
         # Clear current model selection to force refresh
         if hasattr(self, 'model_select') and self.model_select:
             self.model_select.value = None
             self.model_select.options = {}
         
         # Load models for the new mode
-        self._load_available_models()
+        self._load_available_models(show_notifications=False)
         
         # Clear preview
         self.preview_container.clear()

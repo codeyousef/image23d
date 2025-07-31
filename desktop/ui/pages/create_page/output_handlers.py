@@ -59,6 +59,11 @@ class OutputHandlersMixin:
     
     def _show_3d_result(self, model_path: Path, preview_images: list):
         """Store 3D generation result for UI update"""
+        # Store 3D generation result for UI update
+        # Validate preview images
+        if preview_images and not isinstance(preview_images, list):
+            preview_images = [preview_images]
+        
         # Store the result data for UI update
         self._pending_3d_result = {
             'model_path': model_path,
@@ -69,37 +74,67 @@ class OutputHandlersMixin:
         # Store output reference
         self._current_output = model_path
         self._current_output_type = '3d'
+        
+        # Result stored for processing in UI thread
     
     def _update_3d_result_ui(self):
         """Update UI with 3D generation result (called from UI thread)"""
+        # Update UI with pending 3D result if available
+        
         if not hasattr(self, '_pending_3d_result') or not self._pending_3d_result:
+            # No pending result to process
             return
             
         result = self._pending_3d_result
+        # Process the pending result
+        
         if not result.get('completed'):
+            # Result not ready yet
             return
             
         # Clear the pending result
         self._pending_3d_result = None
+        # Clear pending result and update UI
         
         # Update UI
         model_path = result['model_path']
         preview_images = result['preview_images']
         
+        # Update UI with model and preview images
+        
         self.preview_container.clear()
         with self.preview_container:
-            if preview_images:
+            if preview_images and len(preview_images) > 0:
+                # Show preview images in a grid
                 # Show preview images in a grid
                 with ui.grid(columns=2).classes('gap-2 max-w-2xl'):
-                    for img_path in preview_images[:4]:  # Show up to 4 previews
-                        ui.image(str(img_path)).classes('w-full h-48 object-contain')
+                    for i, img_path in enumerate(preview_images[:4]):  # Show up to 4 previews
+                        if isinstance(img_path, (str, Path)) and Path(img_path).exists():
+                            ui.image(str(img_path)).classes('w-full h-48 object-contain')
+                        else:
+                            ui.label(f'Preview {i+1} (missing)').classes('text-red-500')
             else:
+                # No preview images, show 3D icon instead
                 # Show 3D icon if no previews
                 ui.icon('view_in_ar', size='4rem').classes('text-green-500 mb-4')
+                ui.label('3D Model Generated').classes('text-lg font-semibold text-center')
                 
             # Model info
             ui.label(f'Generated 3D model: {model_path.name}').classes('text-sm text-gray-500 mt-2')
             ui.label(f'Format: {model_path.suffix.upper()}').classes('text-sm text-gray-400')
+            
+            # Add model file size if available
+            try:
+                if model_path.exists():
+                    size_mb = model_path.stat().st_size / (1024 * 1024)
+                    ui.label(f'Size: {size_mb:.1f} MB').classes('text-sm text-gray-400')
+                    # File size calculated successfully
+                else:
+                    ui.label('File not found').classes('text-sm text-red-500')
+                    # Model file not found
+            except Exception as e:
+                # Error reading file info
+                ui.label('Error reading file').classes('text-sm text-red-500')
         
         # Show export buttons
         self.export_button.visible = True

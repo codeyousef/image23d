@@ -13,17 +13,20 @@ class PipelineStep:
     label: str
     icon: str
     duration_estimate: Optional[int] = None
+    weight: float = 1.0  # Weight for overall progress calculation
 
 class ProgressPipeline:
     def __init__(self):
         self.steps: List[PipelineStep] = []
         self.current_step_index = -1
+        self.current_step_progress = 0.0  # Progress within current step (0.0 to 1.0)
         self.step_elements: Dict[str, Any] = {}
         self.progress_bar = None
         self.status_label = None
         self.time_label = None
         self.progress_label = None
         self.start_time = None
+        self.current_sub_message = ""  # For sub-step messages like "Diffusion Sampling"
         
     def render(self, container: Optional[ui.element] = None):
         """Render directly into container (assumes it's inside a card)"""
@@ -123,6 +126,58 @@ class ProgressPipeline:
             progress = (self.current_step_index + 1) / len(self.steps)
             self.progress_bar.value = progress
             self.progress_label.text = f'{int(progress * 100)}%'
+        
+        # Update time
+        if self.start_time:
+            elapsed = int(asyncio.get_event_loop().time() - self.start_time)
+            self.time_label.text = f'{elapsed}s'
+    
+    def update_step_progress(self, progress: float, sub_message: str = ""):
+        """Update progress within the current step with clean integer rounding"""
+        if self.current_step_index < 0 or self.current_step_index >= len(self.steps):
+            return
+            
+        # Store the progress and sub-message
+        self.current_step_progress = max(0.0, min(1.0, progress))  # Clamp to 0-1
+        self.current_sub_message = sub_message
+        
+        # Calculate overall progress using weighted steps
+        total_weight = sum(step.weight for step in self.steps)
+        completed_weight = sum(step.weight for step in self.steps[:self.current_step_index])
+        current_step_weight = self.steps[self.current_step_index].weight
+        
+        # Overall progress = (completed steps + current step progress) / total
+        overall_progress = (completed_weight + (current_step_weight * self.current_step_progress)) / total_weight
+        
+        # Apply clean rounding logic (same as downloads)
+        raw_progress_percent = overall_progress * 100
+        if raw_progress_percent >= 99.5 and overall_progress < 1.0:
+            # Cap at 99% if not actually completed to avoid false 100%
+            display_progress = 99
+        else:
+            display_progress = round(raw_progress_percent)
+        
+        # Update progress bar (uses 0-1 scale)
+        self.progress_bar.value = overall_progress
+        self.progress_label.text = f'{display_progress}%'
+        
+        # Update status with step and sub-step info
+        step = self.steps[self.current_step_index]
+        step_num = self.current_step_index + 1
+        total_steps = len(self.steps)
+        
+        if sub_message:
+            # Show both step and sub-step: "Step 3/5 - Diffusion Sampling: 85%"
+            step_progress_percent = round(self.current_step_progress * 100)
+            if step_progress_percent >= 99.5 and self.current_step_progress < 1.0:
+                step_progress_percent = 99
+            self.status_label.text = f'Step {step_num}/{total_steps} - {sub_message}: {step_progress_percent}%'
+        else:
+            # Show step progress: "Step 3/5 - Generate Views: 85%"
+            step_progress_percent = round(self.current_step_progress * 100)
+            if step_progress_percent >= 99.5 and self.current_step_progress < 1.0:
+                step_progress_percent = 99
+            self.status_label.text = f'Step {step_num}/{total_steps} - {step.label}: {step_progress_percent}%'
         
         # Update time
         if self.start_time:

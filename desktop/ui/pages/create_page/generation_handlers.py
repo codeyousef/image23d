@@ -16,9 +16,93 @@ from core.models.generation import (
 )
 from ...components.progress_pipeline_card import PipelineStep
 
+# Import dependency checker
+try:
+    from src.hunyuan3d_app.models.dependencies import DependencyChecker
+except ImportError:
+    from hunyuan3d_app.models.dependencies import DependencyChecker
+
 
 class GenerationHandlersMixin:
     """Mixin for generation handling methods"""
+    
+    def _check_model_dependencies(self) -> Dict[str, Any]:
+        """Check if all required models and components are installed"""
+        # Initialize dependency checker
+        from core.config import MODELS_DIR
+        checker = DependencyChecker(MODELS_DIR)
+        # Check dependencies for current mode
+        
+        # Map current mode to model type
+        if self.current_mode == "image":
+            model_type = "image"
+        elif self.current_mode == "3d":
+            model_type = "3d"
+        elif self.current_mode == "video":
+            model_type = "video"
+        else:
+            model_type = "other"
+            
+        # Check if generation is possible
+        result = checker.can_generate(model_type)
+        # Check if generation is possible
+        
+        # Also check specific model if selected
+        if hasattr(self, 'model_select') and self.model_select and self.model_select.value:
+            model_id = self.model_select.value
+            deps = checker.check_model_dependencies(model_id)
+            result['selected_model_dependencies'] = deps
+            # Check selected model dependencies
+            
+        return result
+        
+    def _show_dependency_dialog(self, dependency_check: Dict[str, Any]):
+        """Show dialog with missing dependencies"""
+        with ui.dialog() as dialog, ui.card().classes('w-[600px]'):
+            with ui.row().classes('items-center justify-between mb-4'):
+                ui.label('Missing Dependencies').classes('text-xl font-bold')
+                ui.button(icon='close', on_click=dialog.close).props('flat round')
+                
+            # Show what's missing
+            if not dependency_check['available_models']:
+                ui.label(f'No {self.current_mode} models are installed.').classes('text-red-500 mb-2')
+                ui.label('Please download at least one model from the Model Manager.').classes('text-sm')
+            else:
+                # Show missing components for available models
+                if dependency_check.get('missing_components'):
+                    ui.label('Some models are missing required components:').classes('mb-2')
+                    
+                    for model_id, missing in dependency_check['missing_components'].items():
+                        with ui.expansion(f'{model_id} (missing {len(missing)} components)', icon='warning').classes('mb-2'):
+                            ui.label('Missing components:').classes('font-semibold')
+                            for component in missing:
+                                with ui.row().classes('items-center gap-2 ml-4'):
+                                    ui.icon('close', size='sm').classes('text-red-500')
+                                    ui.label(component).classes('text-sm')
+                                    
+            # If selected model has issues
+            if 'selected_model_dependencies' in dependency_check:
+                deps = dependency_check['selected_model_dependencies']
+                if not deps['satisfied']:
+                    ui.separator().classes('my-4')
+                    ui.label(f'Selected model "{self.model_select.value}" is missing:').classes('font-semibold')
+                    for component in deps['missing_required']:
+                        with ui.row().classes('items-center gap-2 ml-4'):
+                            ui.icon('close', size='sm').classes('text-red-500')
+                            ui.label(component).classes('text-sm')
+                            
+            # Action buttons
+            with ui.row().classes('gap-2 mt-6'):
+                ui.button('Go to Model Manager', 
+                         on_click=lambda: [dialog.close(), self._navigate_to_models()]).props('unelevated')
+                ui.button('Cancel', on_click=dialog.close).props('flat')
+                
+        dialog.open()
+        
+    def _navigate_to_models(self):
+        """Navigate to models page"""
+        # This would be implemented by the parent page to switch tabs
+        ui.notify('Please go to the Model Manager to download required models', type='info')
     
     async def _start_generation(self):
         """Start the generation process"""
@@ -26,9 +110,15 @@ class GenerationHandlersMixin:
         if not self._check_initialization_status():
             return
         
+        # Check model dependencies
+        dependency_check = self._check_model_dependencies()
+        if not dependency_check['can_generate']:
+            self._show_dependency_dialog(dependency_check)
+            return
+        
         # Validate inputs
-        if not self.prompt_input.value.strip():
-            self._notify_from_background('Please enter a prompt', 'warning')
+        if not self.prompt_input.value or not self.prompt_input.value.strip():
+            ui.notify('Please enter a prompt', type='warning', position='top')
             return
         
         # Cancel any existing generation
@@ -36,7 +126,10 @@ class GenerationHandlersMixin:
             await self._cancel_generation()
         
         # Update UI state
-        self.generate_button.visible = False
+        self.generate_button.disable()
+        self.generate_button.text = 'Generating...'
+        self.generate_button.props('icon=hourglass_empty')  # Change icon to hourglass
+        self.generate_button.update()
         self.cancel_button.visible = True
         self.cancel_button.classes(remove='hidden')
         
@@ -49,25 +142,25 @@ class GenerationHandlersMixin:
         
         # Initialize progress pipeline for the current mode
         if self.current_mode == "3d":
-            # Set up 3D generation pipeline steps
+            # Set up 3D generation pipeline steps with weights
             from ...components.progress_pipeline_card import PipelineStep
             steps = [
-                PipelineStep('enhance', 'Enhance Prompt', 'text_increase', 5),
-                PipelineStep('model', 'Load Model', 'download', 10),
-                PipelineStep('generate', 'Generate Views', 'photo_camera', 30),
-                PipelineStep('postprocess', 'Process 3D', 'view_in_ar', 25),
-                PipelineStep('save', 'Save & Export', 'save', 10)
+                PipelineStep('enhance', 'Enhance Prompt', 'text_increase', 5, weight=0.02),   # 2% of total
+                PipelineStep('model', 'Load Model', 'download', 10, weight=0.05),             # 5% of total  
+                PipelineStep('generate', 'Generate Views', 'photo_camera', 60, weight=0.70),  # 70% of total - Most GPU-intensive
+                PipelineStep('postprocess', 'Process 3D', 'view_in_ar', 30, weight=0.20),     # 20% of total - Texture generation
+                PipelineStep('save', 'Save & Export', 'save', 5, weight=0.03)                # 3% of total
             ]
             self.progress_pipeline.set_steps(steps)
             self.progress_pipeline.start()
         elif self.current_mode == "image":
-            # Set up image generation pipeline steps
+            # Set up image generation pipeline steps with weights
             from ...components.progress_pipeline_card import PipelineStep
             steps = [
-                PipelineStep('enhance', 'Enhance Prompt', 'text_increase', 5),
-                PipelineStep('model', 'Load Model', 'download', 5),
-                PipelineStep('generate', 'Generate Image', 'image', 20),
-                PipelineStep('save', 'Save Result', 'save', 5)
+                PipelineStep('enhance', 'Enhance Prompt', 'text_increase', 5, weight=0.10),   # 10% of total
+                PipelineStep('model', 'Load Model', 'download', 5, weight=0.15),              # 15% of total
+                PipelineStep('generate', 'Generate Image', 'image', 20, weight=0.70),         # 70% of total
+                PipelineStep('save', 'Save Result', 'save', 5, weight=0.05)                  # 5% of total
             ]
             self.progress_pipeline.set_steps(steps)
             self.progress_pipeline.start()
@@ -107,7 +200,10 @@ class GenerationHandlersMixin:
             self.progress_pipeline.fail(error_msg)
         finally:
             # Reset UI state
-            self.generate_button.visible = True
+            self.generate_button.enable()
+            self.generate_button.text = 'Generate'
+            self.generate_button.props('icon=auto_awesome')  # Reset icon
+            self.generate_button.update()
             self.cancel_button.visible = False
     
     async def _generate_image(self, enhancement: Dict[str, Any]):
@@ -184,10 +280,15 @@ class GenerationHandlersMixin:
         )
         
         if result and result.model_path:
+            # 3D generation completed successfully
+            
             self._show_3d_result(
                 result.model_path,
                 result.preview_images if hasattr(result, 'preview_images') else []
             )
+        else:
+            # 3D generation failed or returned no result
+            pass
     
     def _get_3d_processor(self, model_id: str):
         """Get the appropriate 3D processor for the model"""
@@ -206,6 +307,7 @@ class GenerationHandlersMixin:
         
         # Stop the timer if generation is complete
         if hasattr(self, 'generation_task') and self.generation_task and self.generation_task.done():
+            # Generation complete, stop the timer
             if hasattr(self, '_result_checker_timer') and self._result_checker_timer:
                 self._result_checker_timer.active = False
                 self._result_checker_timer = None
@@ -240,18 +342,52 @@ class GenerationHandlersMixin:
             except (ValueError, TypeError):
                 progress_float = 0.0
             
-            # Map step names to pipeline steps
-            step_mapping = {
-                'enhance_prompt': PipelineStep('enhance', 'Enhancing Prompt', message, 'running' if progress_float < 1.0 else 'completed'),
-                'load_model': PipelineStep('model', 'Loading Model', message, 'running' if progress_float < 1.0 else 'completed'),
-                'generate': PipelineStep('generate', 'Generating', message, 'running' if progress_float < 1.0 else 'completed'),
-                'postprocess': PipelineStep('postprocess', 'Post-processing', message, 'running' if progress_float < 1.0 else 'completed'),
-                'save': PipelineStep('save', 'Saving', message, 'running' if progress_float < 1.0 else 'completed'),
+            # Map step names to pipeline step IDs
+            step_id_mapping = {
+                'enhance_prompt': 'enhance',
+                'load_model': 'model', 
+                'generate': 'generate',
+                'postprocess': 'postprocess',
+                'save': 'save',
+                # Handle sub-steps within generate
+                'diffusion_sampling': 'generate',
+                'volume_decoding': 'postprocess',
+                'mesh_generation': 'postprocess',
+                'texture_generation': 'postprocess',
             }
             
-            # For now, just advance the pipeline step instead of adding new ones
-            # The current ProgressPipeline implementation doesn't support add_step
-            if progress_float >= 1.0:
-                # Step completed
+            pipeline_step_id = step_id_mapping.get(step, None)
+            if not pipeline_step_id:
+                return  # Unknown step
+            
+            # Find the step index in our pipeline
+            step_index = -1
+            for i, pipeline_step in enumerate(self.progress_pipeline.steps):
+                if pipeline_step.id == pipeline_step_id:
+                    step_index = i
+                    break
+            
+            if step_index == -1:
+                return  # Step not found
+            
+            # Advance to this step if needed
+            if step_index > self.progress_pipeline.current_step_index:
+                # Need to advance to this step
+                while self.progress_pipeline.current_step_index < step_index:
+                    self.progress_pipeline.advance_step()
+            
+            # Update progress within the current step with clean rounding
+            if step_index == self.progress_pipeline.current_step_index:
+                # Extract sub-step name from message if applicable
+                sub_message = ""
+                if step in ['diffusion_sampling', 'volume_decoding', 'mesh_generation', 'texture_generation']:
+                    sub_message = step.replace('_', ' ').title()
+                elif message and any(keyword in message.lower() for keyword in ['diffusion', 'sampling', 'volume', 'decoding', 'mesh', 'texture']):
+                    sub_message = message
+                
+                # Apply clean progress rounding and update
+                self.progress_pipeline.update_step_progress(progress_float, sub_message)
+            
+            # If step is complete, ensure it's marked as finished
+            if progress_float >= 1.0 and step_index == self.progress_pipeline.current_step_index:
                 self.progress_pipeline.advance_step(message)
-            # else: step still running, don't advance yet
