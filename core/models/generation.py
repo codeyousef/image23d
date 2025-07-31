@@ -51,6 +51,14 @@ class ThreeDGenerationRequest(BaseGenerationRequest):
     normal_enhancement: bool = Field(True, description="Enable normal map enhancement") 
     multiview_consistency: bool = Field(True, description="Enforce multi-view consistency")
     
+    # Performance-critical parameters
+    mesh_decode_resolution: int = Field(64, ge=32, le=128, description="SDF decoding resolution (affects quality vs speed)")
+    mesh_decode_batch_size: Optional[int] = Field(None, description="Batch size for mesh decoding (auto if None)")
+    paint_max_num_view: int = Field(6, ge=4, le=9, description="Max views for texture painting")  
+    paint_resolution: int = Field(512, ge=256, le=768, description="Paint pipeline resolution")
+    render_size: int = Field(1024, ge=512, le=2048, description="Texture rendering size")
+    texture_size: int = Field(1024, ge=512, le=4096, description="Final texture size")
+    
 class VideoGenerationRequest(BaseGenerationRequest):
     """Request model for video generation"""
     model: str = Field(..., description="Video model to use")

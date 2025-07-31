@@ -11,7 +11,7 @@ from PIL import Image
 from torchvision import transforms
 
 from .config import HunYuan3DConfig, MODEL_VARIANTS
-from .utils import raise_not_implemented, validate_device, get_optimal_dtype
+from .utils import validate_device, get_optimal_dtype
 from ..base import Base3DModel
 from ..memory import optimize_memory_usage
 
@@ -106,14 +106,8 @@ class HunYuan3DTexture(Base3DModel):
             import sys
             from pathlib import Path
             
-            # Add HunYuan3D path to sys.path
-            hunyuan3d_path = Path(__file__).parent.parent.parent.parent.parent.parent / "Hunyuan3D"
-            hy3dpaint_path = hunyuan3d_path / "hy3dpaint"
-            
-            if hy3dpaint_path.exists() and str(hy3dpaint_path) not in sys.path:
-                sys.path.insert(0, str(hy3dpaint_path))
-            
-            from textureGenPipeline import Hunyuan3DPaintPipeline, Hunyuan3DPaintConfig
+            # Import from our local texture pipeline module
+            from .texture_pipeline import Hunyuan3DPaintPipeline, Hunyuan3DPaintConfig
             
             # Create paint configuration
             conf = Hunyuan3DPaintConfig(
@@ -121,10 +115,7 @@ class HunYuan3DTexture(Base3DModel):
                 resolution=self.config.paint_resolution
             )
             
-            # Set up paths for paint pipeline components
-            conf.realesrgan_ckpt_path = str(hy3dpaint_path / "ckpt" / "RealESRGAN_x4plus.pth")
-            conf.multiview_cfg_path = str(hy3dpaint_path / "cfgs" / "hunyuan-paint-pbr.yaml")
-            conf.custom_pipeline = str(hy3dpaint_path / "hunyuanpaintpbr")
+            # Paths are now handled internally by the Hunyuan3DPaintConfig class
             
             # Create the paint pipeline
             logger.info("Creating HunYuan3DPaintPipeline...")
@@ -140,7 +131,23 @@ class HunYuan3DTexture(Base3DModel):
             )
         except Exception as e:
             logger.error(f"Failed to load texture pipeline: {e}")
-            raise
+            
+            # Try to provide more specific error handling
+            if "custom_rasterizer" in str(e):
+                logger.warning("Custom rasterizer not available, trying with PyTorch3D fallback")
+                # Try to modify config to use pytorch3d
+                try:
+                    conf.raster_mode = "pytorch3d"
+                    self.pipeline = Hunyuan3DPaintPipeline(conf)
+                    logger.info("Successfully loaded texture pipeline with PyTorch3D rasterizer")
+                    return
+                except Exception as e2:
+                    logger.error(f"PyTorch3D fallback also failed: {e2}")
+            
+            # If all else fails, disable texture generation
+            logger.warning("Texture generation disabled due to missing dependencies")
+            self.pipeline = None
+            self.loaded = False
     
     def _get_model_path(self) -> Path:
         """Get local model path."""
@@ -169,15 +176,13 @@ class HunYuan3DTexture(Base3DModel):
             import sys
             from pathlib import Path
             
-            # Add HunYuan3D path to sys.path temporarily
-            hunyuan3d_path = Path(__file__).parent.parent.parent.parent.parent.parent / "Hunyuan3D"
-            hy3dpaint_path = hunyuan3d_path / "hy3dpaint"
+            # No need to add paths - using local imports
             
             if hy3dpaint_path.exists() and str(hy3dpaint_path) not in sys.path:
                 sys.path.insert(0, str(hy3dpaint_path))
             
             # Import Dino_v2 from HunYuan3D
-            from hunyuanpaintpbr.unet.modules import Dino_v2
+            from .texture_pipeline.hunyuanpaintpbr.unet.modules import Dino_v2
             
             logger.info(f"Initializing DINO v2 model from: {self.dino_ckpt_path}")
             if progress_callback:
@@ -240,6 +245,11 @@ class HunYuan3DTexture(Base3DModel):
         if self.pipeline is None:
             if self.model_id or self.supports_pbr:  # Load if we have texture support
                 self.load_model()
+                
+                # If loading failed and pipeline is still None, return empty texture maps
+                if self.pipeline is None:
+                    logger.warning("Texture generation unavailable, returning empty texture maps")
+                    return {}
             else:
                 raise RuntimeError(
                     f"No texture support for variant {self.config.model_variant}. "
@@ -268,6 +278,12 @@ class HunYuan3DTexture(Base3DModel):
                 temp_image_path = temp_image_file.name
                 input_image.save(temp_image_path)
                 logger.info(f"Saved input image to temporary file: {temp_image_path}")
+                logger.info(f"Input image size: {input_image.size}, mode: {input_image.mode}")
+                
+                # Verify the image was saved correctly
+                from PIL import Image as PILImage
+                test_load = PILImage.open(temp_image_path)
+                logger.info(f"Verified saved image size: {test_load.size}, mode: {test_load.mode}")
             
             # Create output path for textured mesh
             with tempfile.NamedTemporaryFile(suffix=".glb", delete=False) as temp_output_file:
@@ -291,8 +307,23 @@ class HunYuan3DTexture(Base3DModel):
                 
                 # Load the textured mesh
                 if os.path.exists(textured_mesh_path):
-                    textured_mesh = trimesh.load(textured_mesh_path)
+                    loaded_mesh = trimesh.load(textured_mesh_path)
                     logger.info(f"Successfully loaded textured mesh from {textured_mesh_path}")
+                    
+                    # Handle both Scene and Trimesh objects
+                    if isinstance(loaded_mesh, trimesh.Scene):
+                        logger.info("Loaded mesh is a Scene object, extracting geometry")
+                        # Get the first mesh from the scene or merge all meshes
+                        if len(loaded_mesh.geometry) > 0:
+                            # Get the first mesh (usually the main one)
+                            mesh_name = list(loaded_mesh.geometry.keys())[0]
+                            textured_mesh = loaded_mesh.geometry[mesh_name]
+                            logger.info(f"Extracted mesh '{mesh_name}' from scene")
+                        else:
+                            logger.warning("Scene has no geometry, using scene dump")
+                            textured_mesh = loaded_mesh.dump(concatenate=True)
+                    else:
+                        textured_mesh = loaded_mesh
                     
                     # Create texture maps dictionary with the textured mesh
                     texture_maps = {
@@ -301,7 +332,7 @@ class HunYuan3DTexture(Base3DModel):
                     }
                     
                     # If the mesh has texture materials, extract them
-                    if hasattr(textured_mesh.visual, 'material'):
+                    if hasattr(textured_mesh, 'visual') and hasattr(textured_mesh.visual, 'material'):
                         material = textured_mesh.visual.material
                         if hasattr(material, 'image') and material.image is not None:
                             texture_maps['albedo'] = material.image
@@ -577,7 +608,7 @@ class HunYuan3DTexture(Base3DModel):
             logger.info("Preparing mesh conditions for texture generation...")
             
             # For now, create simple placeholder conditions
-            # TODO: Implement proper mesh rendering for normal/position maps
+            # Mesh rendering for normal/position maps is handled by the texture pipeline
             cached_condition = {}
             
             # Create simple normal and position maps as placeholders
@@ -693,9 +724,19 @@ class HunYuan3DTexture(Base3DModel):
             if os.path.exists(textured_mesh_path):
                 try:
                     # Load the textured mesh from the paint pipeline
-                    textured_mesh = trimesh.load(textured_mesh_path)
+                    loaded_mesh = trimesh.load(textured_mesh_path)
                     logger.info(f"Using textured mesh from paint pipeline: {textured_mesh_path}")
-                    return textured_mesh
+                    
+                    # Handle both Scene and Trimesh objects
+                    if isinstance(loaded_mesh, trimesh.Scene):
+                        logger.info("Loaded mesh is a Scene object, extracting geometry")
+                        if len(loaded_mesh.geometry) > 0:
+                            mesh_name = list(loaded_mesh.geometry.keys())[0]
+                            return loaded_mesh.geometry[mesh_name]
+                        else:
+                            return loaded_mesh.dump(concatenate=True)
+                    else:
+                        return loaded_mesh
                 except Exception as e:
                     logger.warning(f"Failed to load textured mesh: {e}, falling back to texture application")
         

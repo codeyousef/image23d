@@ -113,6 +113,20 @@ class CreatePage(
         self.mesh_res_slider = None
         self.texture_res_slider = None
         
+        # Advanced 3D performance controls
+        self.inference_steps_slider = None
+        self.guidance_scale_slider = None
+        self.mesh_decode_resolution_slider = None
+        self.mesh_decode_batch_size_slider = None
+        self.paint_max_views_slider = None
+        self.paint_resolution_slider = None
+        self.render_size_slider = None
+        self.texture_size_slider = None
+        self.time_estimate_card = None
+        self.time_estimate_label = None
+        self.time_breakdown_label = None
+        self.performance_tips = None
+        
         # Get models directory
         from core.config import MODELS_DIR
         self.models_dir = MODELS_DIR

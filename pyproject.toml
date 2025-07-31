@@ -31,6 +31,7 @@ dependencies = [
     "point-cloud-utils>=0.29.0",
     "pyglet<2.0.0", # For 3D rendering and preview generation (trimesh requires <2.0)
     "xatlas>=0.0.9", # For UV unwrapping in HunYuan3D texture generation
+    # "pytorch3d>=0.7.0", # For differentiable 3D rendering and rasterization (Windows not supported)
     # Image Processing
     "pillow>=10.0.0",
     "opencv-python>=4.8.0",

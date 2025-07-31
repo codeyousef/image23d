@@ -142,14 +142,17 @@ class GenerationHandlersMixin:
         
         # Initialize progress pipeline for the current mode
         if self.current_mode == "3d":
-            # Set up 3D generation pipeline steps with weights
+            # Get estimated time for current parameters
+            estimated_time = self._get_current_time_estimate()
+            
+            # Set up 3D generation pipeline steps with weights and time estimates
             from ...components.progress_pipeline_card import PipelineStep
             steps = [
-                PipelineStep('enhance', 'Enhance Prompt', 'text_increase', 5, weight=0.02),   # 2% of total
-                PipelineStep('model', 'Load Model', 'download', 10, weight=0.05),             # 5% of total  
-                PipelineStep('generate', 'Generate Views', 'photo_camera', 60, weight=0.70),  # 70% of total - Most GPU-intensive
-                PipelineStep('postprocess', 'Process 3D', 'view_in_ar', 30, weight=0.20),     # 20% of total - Texture generation
-                PipelineStep('save', 'Save & Export', 'save', 5, weight=0.03)                # 3% of total
+                PipelineStep('enhance', 'Enhance Prompt', 'text_increase', int(estimated_time * 0.02), weight=0.02),   # 2% of total
+                PipelineStep('model', 'Load Model', 'download', int(estimated_time * 0.05), weight=0.05),             # 5% of total  
+                PipelineStep('generate', 'Generate Views', 'photo_camera', int(estimated_time * 0.70), weight=0.70),  # 70% of total - Most GPU-intensive
+                PipelineStep('postprocess', 'Process 3D', 'view_in_ar', int(estimated_time * 0.20), weight=0.20),     # 20% of total - Texture generation
+                PipelineStep('save', 'Save & Export', 'save', int(estimated_time * 0.03), weight=0.03)                # 3% of total
             ]
             self.progress_pipeline.set_steps(steps)
             self.progress_pipeline.start()
@@ -253,17 +256,24 @@ class GenerationHandlersMixin:
             self._notify_from_background('Please select an image generation model for text-to-3D', 'warning')
             return
         
-        # Create generation request
+        # Create generation request with advanced performance parameters
         request = ThreeDGenerationRequest(
             prompt=self.prompt_input.value,
             negative_prompt=self.negative_input.value or "",
             input_image=str(input_image) if input_image else None,
             num_views=int(self.num_views_slider.value),
-            mesh_resolution=int(self.mesh_res_slider.value),
-            texture_resolution=int(self.texture_res_slider.value),
+            mesh_resolution=int(getattr(self, 'mesh_res_slider', type('obj', (), {'value': 256})).value),
+            texture_resolution=int(getattr(self, 'texture_res_slider', type('obj', (), {'value': 1024})).value),
             export_formats=[self.format_select.value.lower()],
             model=self.model_select.value,
-            image_model=self.image_model_select.value if not input_image else None
+            image_model=self.image_model_select.value if not input_image else None,
+            # Advanced performance parameters
+            mesh_decode_resolution=int(getattr(self, 'mesh_decode_resolution_slider', type('obj', (), {'value': 64})).value),
+            mesh_decode_batch_size=getattr(self, 'mesh_decode_batch_size_slider', type('obj', (), {'value': 0})).value or None,
+            paint_max_num_view=int(getattr(self, 'paint_max_views_slider', type('obj', (), {'value': 6})).value),
+            paint_resolution=int(getattr(self, 'paint_resolution_slider', type('obj', (), {'value': 512})).value),
+            render_size=int(getattr(self, 'render_size_slider', type('obj', (), {'value': 1024})).value),
+            texture_size=int(getattr(self, 'texture_size_slider', type('obj', (), {'value': 1024})).value)
         )
         
         # Apply enhancements
@@ -324,6 +334,13 @@ class GenerationHandlersMixin:
     
     def _update_progress_safe(self, step: str, progress: float, message: str = ""):
         """Thread-safe progress update"""
+        # Ensure message is always a string (safety check for tensor arguments)
+        if hasattr(message, 'shape'):
+            # This is likely a tensor, convert to safe string
+            message = f"Processing tensor with shape {message.shape}"
+        else:
+            message = str(message) if message is not None else ""
+        
         # Queue the update for the main thread
         self._pipeline_update_queue.append((step, progress, message))
     
@@ -391,3 +408,31 @@ class GenerationHandlersMixin:
             # If step is complete, ensure it's marked as finished
             if progress_float >= 1.0 and step_index == self.progress_pipeline.current_step_index:
                 self.progress_pipeline.advance_step(message)
+    
+    def _get_current_time_estimate(self) -> float:
+        """Get current time estimate based on selected parameters"""
+        try:
+            from desktop.ui.utils.time_estimation import estimate_3d_generation_time
+            
+            # Get current parameter values
+            params = {
+                'num_inference_steps': getattr(self, 'inference_steps_slider', type('obj', (), {'value': 50})).value,
+                'guidance_scale': getattr(self, 'guidance_scale_slider', type('obj', (), {'value': 7.5})).value,
+                'mesh_decode_resolution': getattr(self, 'mesh_decode_resolution_slider', type('obj', (), {'value': 64})).value,
+                'mesh_decode_batch_size': getattr(self, 'mesh_decode_batch_size_slider', type('obj', (), {'value': 0})).value or None,
+                'paint_max_num_view': getattr(self, 'paint_max_views_slider', type('obj', (), {'value': 6})).value,
+                'paint_resolution': getattr(self, 'paint_resolution_slider', type('obj', (), {'value': 512})).value,
+                'render_size': getattr(self, 'render_size_slider', type('obj', (), {'value': 1024})).value,
+                'texture_size': getattr(self, 'texture_size_slider', type('obj', (), {'value': 1024})).value,
+                'num_views': getattr(self, 'num_views_slider', type('obj', (), {'value': 6})).value,
+                'enable_texture': True,
+                'model': getattr(self, 'model_select', type('obj', (), {'value': 'hunyuan3d-21'})).value or 'hunyuan3d-21'
+            }
+            
+            # Calculate time estimate
+            estimate = estimate_3d_generation_time(**params)
+            return estimate['total_time']
+            
+        except ImportError:
+            # Fallback to simple estimate
+            return 60.0  # Default 1 minute estimate
