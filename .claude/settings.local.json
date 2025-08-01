@@ -53,8 +53,10 @@
       "Bash(PYTHONPATH=/mnt/d/Projects/Python/hunyuan3d-app:/mnt/d/Projects/Python/hunyuan3d-app/src python -m pytest tests/real_imports/test_end_to_end.py::TestEndToEndFunctionality::test_hunyuan3d_studio_initialization -v --no-cov)",
       "Bash(PYTHONPATH=/mnt/d/Projects/Python/hunyuan3d-app:/mnt/d/Projects/Python/hunyuan3d-app/src python -m pytest tests/real_imports/test_desktop_startup.py -v --no-cov)",
       "WebFetch(domain:huggingface.co)",
-      "Bash(realpath:*)"
+      "Bash(realpath:*)",
+      "Bash(git check-ignore:*)"
     ],
     "deny": []
-  }
+  },
+  "$schema": "https://json.schemastore.org/claude-code-settings.json"
 }
