@@ -5,10 +5,12 @@ It replaces the old placeholder implementation with proper HunYuan3D support.
 """
 
 import logging
+import torch
 from pathlib import Path
 from typing import Dict, Any, Optional, Union, Callable
 from PIL import Image
 import time
+from enum import Enum
 
 from ..models.threed.orchestrator import (
     ThreeDOrchestrator,
@@ -21,16 +23,106 @@ from ..services.websocket import create_websocket_progress_callback
 logger = logging.getLogger(__name__)
 
 
+class MemoryProfile(Enum):
+    """Memory profiles for different VRAM configurations based on Hunyuan3D-2GP"""
+    PROFILE_1 = "profile_1"  # 32GB+ VRAM - Ultra settings
+    PROFILE_2 = "profile_2"  # 24GB VRAM - High settings
+    PROFILE_3 = "profile_3"  # 16GB VRAM - Standard settings (default)
+    PROFILE_4 = "profile_4"  # 9GB VRAM - Memory efficient
+    PROFILE_5 = "profile_5"  # 6GB VRAM - Minimal requirements
+
+
+MEMORY_PROFILE_CONFIGS = {
+    MemoryProfile.PROFILE_1: {
+        "name": "Ultra (32GB+)",
+        "min_vram_gb": 32.0,
+        "max_resolution": 2048,
+        "batch_size": 8,
+        "enable_quantization": False,
+        "preferred_quantization": None,
+        "use_cpu_offload": False,
+        "use_sequential": False,
+        "texture_resolution": 4096,
+        "multiview_count": 12,
+        "enable_pbr": True,
+        "description": "Maximum quality for high-end workstations"
+    },
+    MemoryProfile.PROFILE_2: {
+        "name": "High (24GB)",
+        "min_vram_gb": 24.0,
+        "max_resolution": 1536,
+        "batch_size": 6,
+        "enable_quantization": False,
+        "preferred_quantization": None,
+        "use_cpu_offload": False,
+        "use_sequential": False,
+        "texture_resolution": 2048,
+        "multiview_count": 10,
+        "enable_pbr": True,
+        "description": "High quality for professional GPUs"
+    },
+    MemoryProfile.PROFILE_3: {
+        "name": "Standard (16GB)",
+        "min_vram_gb": 16.0,
+        "max_resolution": 1024,
+        "batch_size": 4,
+        "enable_quantization": False,
+        "preferred_quantization": None,
+        "use_cpu_offload": False,
+        "use_sequential": False,
+        "texture_resolution": 1024,
+        "multiview_count": 8,
+        "enable_pbr": True,
+        "description": "Default settings for consumer GPUs"
+    },
+    MemoryProfile.PROFILE_4: {
+        "name": "Efficient (9GB)",
+        "min_vram_gb": 9.0,
+        "max_resolution": 768,
+        "batch_size": 2,
+        "enable_quantization": True,
+        "preferred_quantization": "Q8_0",
+        "use_cpu_offload": True,
+        "use_sequential": True,
+        "texture_resolution": 512,
+        "multiview_count": 6,
+        "enable_pbr": False,
+        "description": "Memory efficient for mid-range GPUs"
+    },
+    MemoryProfile.PROFILE_5: {
+        "name": "Minimal (6GB)",
+        "min_vram_gb": 6.0,
+        "max_resolution": 512,
+        "batch_size": 1,
+        "enable_quantization": True,
+        "preferred_quantization": "Q4_K_M",
+        "use_cpu_offload": True,
+        "use_sequential": True,
+        "texture_resolution": 512,
+        "multiview_count": 4,
+        "enable_pbr": False,
+        "description": "Minimal requirements for entry-level GPUs"
+    }
+}
+
+
 class ThreeDGenerator:
     """Main interface for 3D generation"""
     
-    def __init__(self):
+    def __init__(self, memory_profile: Optional[MemoryProfile] = None):
         self.orchestrator = ThreeDOrchestrator()
         self.generation_count = 0
+        
+        # Memory profile system
+        self.memory_profile = memory_profile or self._detect_memory_profile()
+        self.memory_config = MEMORY_PROFILE_CONFIGS[self.memory_profile]
+        
+        logger.info(f"Initialized ThreeDGenerator with memory profile: {self.memory_config['name']} ({self.memory_config['min_vram_gb']}GB+)")
         
     def generate_3d(
         self,
         image: Union[Image.Image, str],
+        prompt: Optional[str] = None,
         model_type: str = "auto",
         quality_preset: str = "standard",
         output_format: str = "glb",
@@ -43,6 +135,7 @@ class ThreeDGenerator:
         
         Args:
             image: Input image or path
+            prompt: Text description of the desired 3D model (optional)
             model_type: Model to use ("auto", "hunyuan3d-21", "hunyuan3d-2mini", etc.)
             quality_preset: Quality preset ("draft", "standard", "high", "ultra")
             output_format: Output format ("glb", "obj", "ply", etc.)
@@ -83,13 +176,17 @@ class ThreeDGenerator:
             if isinstance(image, str):
                 image = Image.open(image)
                 
-            # Prepare task requirements
+            # Get memory-optimized parameters
+            optimized_params = self.get_optimized_generation_params(quality_preset)
+            logger.info(f"[3D_GENERATION] Using memory profile {self.memory_config['name']} with optimizations: {optimized_params}")
+            
+            # Prepare task requirements with memory profile considerations
             required_capabilities = [ModelCapability.IMAGE_TO_3D]
             
-            if enable_pbr:
+            if enable_pbr and optimized_params["enable_pbr"]:
                 required_capabilities.append(ModelCapability.PBR_MATERIALS)
                 
-            if quality_preset in {"high", "ultra"}:
+            if quality_preset in {"high", "ultra"} and not optimized_params["memory_efficient"]:
                 required_capabilities.append(ModelCapability.HIGH_RESOLUTION)
                 
             requirements = TaskRequirements(
@@ -97,7 +194,9 @@ class ThreeDGenerator:
                 quality_preset=quality_preset,
                 output_format=output_format,
                 required_capabilities=required_capabilities,
-                max_generation_time=max_generation_time
+                max_generation_time=max_generation_time,
+                # Add memory profile constraints
+                memory_profile=optimized_params
             )
             
             # Override model selection if specific model requested
@@ -106,10 +205,16 @@ class ThreeDGenerator:
                 model_mapping = {
                     "hunyuan3d-21": "hunyuan3d-21",
                     "hunyuan3d-2.1": "hunyuan3d-21",
+                    "hunyuan3d-21-turbo": "hunyuan3d-21-turbo",
+                    "hunyuan3d-2.1-turbo": "hunyuan3d-21-turbo",
                     "hunyuan3d-mini": "hunyuan3d-2mini",
                     "hunyuan3d-2mini": "hunyuan3d-2mini",
+                    "hunyuan3d-mini-turbo": "hunyuan3d-2mini-turbo",
+                    "hunyuan3d-2mini-turbo": "hunyuan3d-2mini-turbo",
                     "hi3dgen": "hi3dgen",
-                    "sparc3d": "sparc3d"
+                    "hi3dgen-turbo": "hi3dgen-turbo",
+                    "sparc3d": "sparc3d",
+                    "sparc3d-turbo": "sparc3d-turbo"
                 }
                 
                 logger.info(f"[3D_GENERATION] Looking up model mapping for: '{model_type.lower()}'")
@@ -135,19 +240,39 @@ class ThreeDGenerator:
                         logger.warning(f"Model {model_type} not available, using auto selection")
                         
             # Generate 3D model
+            # Pass prompt through generation parameters
+            generation_params = {}
+            if prompt:
+                generation_params["prompt"] = prompt
+                
             result = self.orchestrator.generate(
                 image,
                 requirements,
-                progress_callback
+                progress_callback,
+                **generation_params
             )
             
             # Get generation time
             generation_time = time.time() - start_time
             
-            # Create preview render
+            # CRITICAL FIX: Use actual input image as preview instead of mesh render
             preview_image = None
             try:
-                preview_image = self._create_preview(result)
+                # Use the actual input image that was processed, not a mesh render
+                # This fixes the user's complaint: "preview.png and generated image in the cache have nothing to do with each other"
+                if isinstance(image, Image.Image):
+                    preview_image = image.copy()  # Use the actual input image
+                    logger.info(f"✅ Using actual input image as preview: {image.size}, {image.mode}")
+                    
+                    # Track the preview image hash for debugging
+                    import hashlib
+                    if hasattr(preview_image, 'tobytes'):
+                        preview_hash = hashlib.md5(preview_image.tobytes()).hexdigest()[:8]
+                        logger.info(f"🌼 [3D_GENERATION] Preview image hash: {preview_hash}")
+                else:
+                    # Fallback to mesh render only if no input image available
+                    logger.info("No input image available, falling back to mesh render for preview")
+                    preview_image = self._create_preview(result)
             except Exception as e:
                 logger.warning(f"Failed to create preview image: {e}")
                 preview_image = None
@@ -338,6 +463,106 @@ class ThreeDGenerator:
             return profile.performance_metrics.get(quality_preset, 60.0)
             
         return 60.0  # Default estimate
+    
+    def _detect_memory_profile(self) -> MemoryProfile:
+        """Auto-detect appropriate memory profile based on available VRAM"""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                # Get VRAM of primary GPU
+                vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                logger.info(f"Detected {vram_gb:.1f}GB VRAM on primary GPU")
+                
+                # Select profile based on available VRAM
+                if vram_gb >= 32:
+                    return MemoryProfile.PROFILE_1
+                elif vram_gb >= 24:
+                    return MemoryProfile.PROFILE_2
+                elif vram_gb >= 16:
+                    return MemoryProfile.PROFILE_3
+                elif vram_gb >= 9:
+                    return MemoryProfile.PROFILE_4
+                else:
+                    return MemoryProfile.PROFILE_5
+            else:
+                logger.warning("CUDA not available, using minimal profile")
+                return MemoryProfile.PROFILE_5
+        except Exception as e:
+            logger.warning(f"Failed to detect VRAM, using default profile: {e}")
+            return MemoryProfile.PROFILE_3  # Default to 16GB profile
+    
+    def set_memory_profile(self, profile: Union[MemoryProfile, str]) -> bool:
+        """Set memory profile manually
+        
+        Args:
+            profile: Memory profile enum or string ("profile_1" to "profile_5")
+            
+        Returns:
+            True if profile was set successfully
+        """
+        try:
+            if isinstance(profile, str):
+                profile = MemoryProfile(profile)
+            
+            if profile not in MEMORY_PROFILE_CONFIGS:
+                logger.error(f"Invalid memory profile: {profile}")
+                return False
+            
+            old_profile = self.memory_profile
+            self.memory_profile = profile
+            self.memory_config = MEMORY_PROFILE_CONFIGS[profile]
+            
+            logger.info(f"Changed memory profile from {MEMORY_PROFILE_CONFIGS[old_profile]['name']} to {self.memory_config['name']}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to set memory profile: {e}")
+            return False
+    
+    def get_memory_profile_info(self) -> Dict[str, Any]:
+        """Get current memory profile information"""
+        return {
+            "profile": self.memory_profile.value,
+            "config": self.memory_config.copy(),
+            "detected_vram_gb": self._get_detected_vram()
+        }
+    
+    def _get_detected_vram(self) -> float:
+        """Get detected VRAM in GB"""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        except:
+            pass
+        return 0.0
+    
+    def get_optimized_generation_params(self, quality_preset: str) -> Dict[str, Any]:
+        """Get generation parameters optimized for current memory profile
+        
+        Args:
+            quality_preset: Base quality preset
+            
+        Returns:
+            Optimized parameters for the current memory profile
+        """
+        base_preset = QUALITY_PRESETS_3D.get(quality_preset, QUALITY_PRESETS_3D["standard"])
+        
+        # Apply memory profile optimizations
+        optimized_params = {
+            "max_resolution": min(base_preset.reconstruction_resolution, self.memory_config["max_resolution"]),
+            "batch_size": self.memory_config["batch_size"],
+            "texture_resolution": min(base_preset.texture_resolution, self.memory_config["texture_resolution"]),
+            "multiview_count": min(base_preset.multiview_count, self.memory_config["multiview_count"]),
+            "enable_quantization": self.memory_config["enable_quantization"],
+            "use_cpu_offload": self.memory_config["use_cpu_offload"],
+            "use_sequential": self.memory_config["use_sequential"],
+            "enable_pbr": base_preset.use_pbr and self.memory_config["enable_pbr"],
+            "memory_efficient": base_preset.memory_efficient or self.memory_config["enable_quantization"]
+        }
+        
+        logger.debug(f"Optimized params for {quality_preset} with {self.memory_config['name']}: {optimized_params}")
+        return optimized_params
         
     def cleanup(self):
         """Cleanup resources"""

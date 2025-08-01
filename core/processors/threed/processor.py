@@ -152,6 +152,17 @@ class ThreeDProcessor:
                 request.remove_background
             )
             
+            # CRITICAL: Save a copy of the actual processed input image for debugging
+            if input_image and hasattr(input_image, 'save'):
+                import hashlib
+                image_hash = hashlib.md5(input_image.tobytes()).hexdigest()[:8]
+                logger.info(f"📸 [PROCESSOR] Input image processed, hash: {image_hash}")
+                
+                # Save the actual input image that will be sent to HunYuan3D
+                debug_input_path = output_subdir / f"DEBUG_actual_input_{image_hash}.png"
+                input_image.save(debug_input_path)
+                logger.info(f"📁 [PROCESSOR] Saved actual input image to: {debug_input_path}")
+            
         # Enhance prompt if text-to-3D
         enhanced_prompt = request.prompt
         if request.use_enhancement and not request.input_image:
@@ -199,6 +210,12 @@ class ThreeDProcessor:
         if input_image:
             # Image-to-3D: Use the input image directly
             generation_input = input_image
+            
+            # CRITICAL: Track the image hash before sending to 3D generation
+            if hasattr(generation_input, 'tobytes'):
+                import hashlib
+                image_hash = hashlib.md5(generation_input.tobytes()).hexdigest()[:8]
+                logger.info(f"📸 [PROCESSOR] Generation input hash (before 3D gen): {image_hash}")
         else:
             # Text-to-3D: Need to generate an image from text first
             if progress_callback:
@@ -238,8 +255,25 @@ class ThreeDProcessor:
             
             generation_input = placeholder_image
             
+            # CRITICAL: Track the generated placeholder image hash
+            if hasattr(generation_input, 'tobytes'):
+                import hashlib
+                image_hash = hashlib.md5(generation_input.tobytes()).hexdigest()[:8]
+                logger.info(f"📸 [PROCESSOR] Placeholder generation input hash: {image_hash}")
+                # Save the placeholder for comparison
+                placeholder_path = output_subdir / f"DEBUG_placeholder_{image_hash}.png"
+                generation_input.save(placeholder_path)
+                logger.info(f"📁 [PROCESSOR] Saved placeholder image to: {placeholder_path}")
+            
             if progress_callback:
                 progress_callback("generate", 0.18, "Text-to-image completed, starting 3D generation...")
+        
+        # CRITICAL: Final tracking before 3D generation
+        if hasattr(generation_input, 'tobytes'):
+            import hashlib
+            final_hash = hashlib.md5(generation_input.tobytes()).hexdigest()[:8]
+            logger.info(f"🚀 [PROCESSOR] FINAL IMAGE HASH being sent to 3D generation: {final_hash}")
+            logger.info(f"🔍 [PROCESSOR] Final image details: size={generation_input.size}, mode={generation_input.mode}")
         
         # Run real HunYuan3D generation
         result = await asyncio.to_thread(
@@ -252,6 +286,14 @@ class ThreeDProcessor:
             enable_depth_refinement=request.depth_enhancement,
             progress_callback=wrapped_progress_callback
         )
+        
+        # CRITICAL: Track what comes back from 3D generation
+        logger.info(f"📄 [PROCESSOR] 3D generation result keys: {list(result.keys())}")
+        if "preview_image" in result:
+            logger.info(f"🖼️ [PROCESSOR] Preview image returned from 3D gen: {type(result['preview_image'])}")
+        
+        # CRITICAL: Track the 3D generation result details
+        logger.info(f"📄 [PROCESSOR] 3D generation completed, result keys: {list(result.keys())}")
         
         # Process the result
         model_path = Path(result["output_path"])
@@ -286,9 +328,23 @@ class ThreeDProcessor:
                     preview_path = output_subdir / f"preview_{i}.png"
                     img.save(preview_path)
                     preview_images.append(preview_path)
-                    logger.info(f"Saved generated image {i} to {preview_path}")
+                    # CRITICAL: Track generated image hashes
+                    if hasattr(img, 'tobytes'):
+                        import hashlib
+                        gen_hash = hashlib.md5(img.tobytes()).hexdigest()[:8]
+                        logger.info(f"🖼️ [PROCESSOR] Generated image {i} hash: {gen_hash}")
+                    logger.info(f"📁 [PROCESSOR] Saved generated image {i} to {preview_path}")
         
-        logger.info(f"Total preview images saved: {len(preview_images)}")
+        logger.info(f"📁 [PROCESSOR] Total preview images saved: {len(preview_images)}")
+        
+        # CRITICAL: Create a summary of all saved images for debugging
+        logger.info(f"📈 [PROCESSOR] IMAGE FLOW SUMMARY:")
+        debug_files = list(output_subdir.glob("DEBUG_*"))
+        for debug_file in debug_files:
+            logger.info(f"   - {debug_file.name}")
+        if preview_images:
+            for preview_path in preview_images:
+                logger.info(f"   - FINAL: {preview_path.name}")
         
         # Handle export formats
         export_paths = {}

@@ -35,6 +35,15 @@ class JobPriority(Enum):
     URGENT = 0
 
 
+class VRAMProfile(Enum):
+    """VRAM profiles for memory management"""
+    ULTRA = "profile_1"  # 32GB+ VRAM
+    HIGH = "profile_2"   # 24GB VRAM  
+    STANDARD = "profile_3"  # 16GB VRAM
+    EFFICIENT = "profile_4"  # 9GB VRAM
+    MINIMAL = "profile_5"   # 6GB VRAM
+
+
 @dataclass
 class GenerationJob:
     """Represents a single generation job"""
@@ -48,6 +57,10 @@ class GenerationJob:
     completed_at: Optional[float] = None
     result: Optional[Any] = None
     error: Optional[str] = None
+    # Low VRAM mode support
+    low_vram_mode: bool = False
+    memory_profile: Optional[str] = None  # "profile_1" to "profile_5"
+    estimated_vram_gb: Optional[float] = None
     progress: float = 0.0
     progress_message: str = ""
     metadata: Dict[str, Any] = None
@@ -147,7 +160,8 @@ class QueueManager:
         self,
         max_workers: int = 2,
         max_queue_size: int = 100,
-        job_history_dir: Optional[Path] = None
+        job_history_dir: Optional[Path] = None,
+        auto_detect_vram: bool = True
     ):
         self.max_workers = max_workers
         self.max_queue_size = max_queue_size
@@ -170,6 +184,12 @@ class QueueManager:
         # Progress callbacks
         self.progress_callbacks: Dict[str, Callable] = {}
         
+        # VRAM management
+        self.auto_detect_vram = auto_detect_vram
+        self.detected_vram_gb = self._detect_vram()
+        self.current_vram_profile = self._get_optimal_vram_profile()
+        logger.info(f"QueueManager initialized with VRAM profile: {self.current_vram_profile.value} ({self.detected_vram_gb:.1f}GB detected)")
+        
         # Start workers
         self._start_workers()
         
@@ -185,6 +205,68 @@ class QueueManager:
             self.workers.append(worker)
             
         logger.info(f"Started {self.max_workers} queue workers")
+        
+    def _detect_vram(self) -> float:
+        """Detect available VRAM in GB"""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                vram_bytes = torch.cuda.get_device_properties(0).total_memory
+                vram_gb = vram_bytes / (1024**3)
+                logger.info(f"Detected {vram_gb:.1f}GB VRAM")
+                return vram_gb
+        except Exception as e:
+            logger.warning(f"Failed to detect VRAM: {e}")
+        return 8.0  # Default assumption
+        
+    def _get_optimal_vram_profile(self) -> VRAMProfile:
+        """Get optimal VRAM profile based on detected VRAM"""
+        if self.detected_vram_gb >= 32:
+            return VRAMProfile.ULTRA
+        elif self.detected_vram_gb >= 24:
+            return VRAMProfile.HIGH
+        elif self.detected_vram_gb >= 16:
+            return VRAMProfile.STANDARD
+        elif self.detected_vram_gb >= 9:
+            return VRAMProfile.EFFICIENT
+        else:
+            return VRAMProfile.MINIMAL
+            
+    def _apply_vram_optimizations(self, job: GenerationJob) -> GenerationJob:
+        """Apply VRAM optimizations to job parameters"""
+        if not job.low_vram_mode and self.current_vram_profile in [VRAMProfile.EFFICIENT, VRAMProfile.MINIMAL]:
+            # Auto-enable low VRAM mode for low-memory systems
+            job.low_vram_mode = True
+            job.memory_profile = self.current_vram_profile.value
+            logger.info(f"Auto-enabled low VRAM mode for job {job.id} (profile: {self.current_vram_profile.value})")
+            
+        if job.low_vram_mode or job.memory_profile:
+            # Apply memory optimizations to job parameters
+            profile = job.memory_profile or self.current_vram_profile.value
+            
+            # Memory profile optimizations
+            optimizations = {
+                "profile_1": {"batch_size": 8, "resolution": 2048, "enable_quantization": False},
+                "profile_2": {"batch_size": 6, "resolution": 1536, "enable_quantization": False},
+                "profile_3": {"batch_size": 4, "resolution": 1024, "enable_quantization": False},
+                "profile_4": {"batch_size": 2, "resolution": 768, "enable_quantization": True, "quantization": "Q8_0"},
+                "profile_5": {"batch_size": 1, "resolution": 512, "enable_quantization": True, "quantization": "Q4_K_M"}
+            }
+            
+            if profile in optimizations:
+                opts = optimizations[profile]
+                # Apply optimizations to job params
+                if "batch_size" in opts:
+                    job.params["batch_size"] = opts["batch_size"]
+                if "resolution" in opts:
+                    job.params["max_resolution"] = opts["resolution"]
+                if opts.get("enable_quantization", False):
+                    job.params["use_quantization"] = True
+                    job.params["quantization_level"] = opts.get("quantization", "Q8_0")
+                    
+                logger.info(f"Applied VRAM optimizations to job {job.id}: {opts}")
+                
+        return job
         
     def _worker_loop(self):
         """Main worker loop"""
@@ -306,7 +388,9 @@ class QueueManager:
         job_type: str,
         params: Dict[str, Any],
         priority: JobPriority = JobPriority.NORMAL,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        low_vram_mode: bool = False,
+        memory_profile: Optional[str] = None
     ) -> GenerationJob:
         """Submit a new job to the queue
         
@@ -325,8 +409,14 @@ class QueueManager:
             type=job_type,
             params=params,
             priority=priority,
-            metadata=metadata or {}
+            created_at=time.time(),
+            low_vram_mode=low_vram_mode,
+            memory_profile=memory_profile,
+            estimated_vram_gb=self.detected_vram_gb
         )
+        
+        # Apply VRAM optimizations
+        job = self._apply_vram_optimizations(job)
         
         # Store job with thread safety
         with self.jobs_lock:

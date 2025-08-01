@@ -25,10 +25,14 @@ logger = logging.getLogger(__name__)
 class ModelType3D(Enum):
     """Types of 3D models supported"""
     HUNYUAN3D_21 = "hunyuan3d-21"
+    HUNYUAN3D_21_TURBO = "hunyuan3d-21-turbo"  # 50% faster inference
     HUNYUAN3D_2MINI = "hunyuan3d-2mini"
+    HUNYUAN3D_2MINI_TURBO = "hunyuan3d-2mini-turbo"  # 50% faster inference
     HUNYUAN3D_2MV = "hunyuan3d-2mv"
     HI3DGEN = "hi3dgen"  # Coming April 2025
+    HI3DGEN_TURBO = "hi3dgen-turbo"  # Coming April 2025
     SPARC3D = "sparc3d"
+    SPARC3D_TURBO = "sparc3d-turbo"  # 50% faster inference
 
 
 class IntermediateFormat(Enum):
@@ -339,5 +343,71 @@ class Base3DPipeline(ABC):
         
     def supports_quantization(self) -> bool:
         """Check if pipeline supports GGUF quantization"""
-        # Override in specific implementations
+        # Check if any model supports quantization
+        if self.multiview_model and hasattr(self.multiview_model, 'supports_quantization'):
+            return self.multiview_model.supports_quantization()
+        if self.reconstruction_model and hasattr(self.reconstruction_model, 'supports_quantization'):
+            return self.reconstruction_model.supports_quantization()
+        if self.texture_model and hasattr(self.texture_model, 'supports_quantization'):
+            return self.texture_model.supports_quantization()
         return False
+        
+    def apply_quantization(self, quantization_level: str = "Q8_0") -> bool:
+        """Apply GGUF quantization to supported models
+        
+        Args:
+            quantization_level: Quantization level (Q8_0, Q6_K, Q5_K_S, Q4_K_M)
+            
+        Returns:
+            True if quantization was applied successfully
+        """
+        success = True
+        applied_models = []
+        
+        # Apply to multiview model
+        if self.multiview_model and hasattr(self.multiview_model, 'apply_quantization'):
+            if self.multiview_model.apply_quantization(quantization_level):
+                applied_models.append("multiview")
+            else:
+                success = False
+        
+        # Apply to reconstruction model  
+        if self.reconstruction_model and hasattr(self.reconstruction_model, 'apply_quantization'):
+            if self.reconstruction_model.apply_quantization(quantization_level):
+                applied_models.append("reconstruction")
+            else:
+                success = False
+                
+        # Apply to texture model
+        if self.texture_model and hasattr(self.texture_model, 'apply_quantization'):
+            if self.texture_model.apply_quantization(quantization_level):
+                applied_models.append("texture")
+            else:
+                success = False
+        
+        if applied_models:
+            logger.info(f"Applied {quantization_level} quantization to: {', '.join(applied_models)}")
+        
+        return success
+        
+    def get_quantization_info(self) -> Dict[str, Any]:
+        """Get current quantization information
+        
+        Returns:
+            Dictionary with quantization status for each model
+        """
+        info = {
+            "supports_quantization": self.supports_quantization(),
+            "models": {}
+        }
+        
+        if self.multiview_model and hasattr(self.multiview_model, 'get_quantization_info'):
+            info["models"]["multiview"] = self.multiview_model.get_quantization_info()
+            
+        if self.reconstruction_model and hasattr(self.reconstruction_model, 'get_quantization_info'):
+            info["models"]["reconstruction"] = self.reconstruction_model.get_quantization_info()
+            
+        if self.texture_model and hasattr(self.texture_model, 'get_quantization_info'):
+            info["models"]["texture"] = self.texture_model.get_quantization_info()
+            
+        return info

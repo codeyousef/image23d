@@ -29,14 +29,14 @@ def estimate_3d_generation_time(
         Dict with total_time (seconds), breakdown by stage, and performance tips
     """
     
-    # Base times (in seconds) for reference hardware (RTX 4090) - OPTIMIZED VALUES
-    BASE_SHAPE_TIME = 5.0   # Optimized shape generation (was 15.0 - 3x faster)
-    BASE_TEXTURE_TIME = 8.0  # Optimized texture generation (was 25.0 - 3x faster)
+    # Base times (in seconds) for reference hardware (RTX 4090) - REALISTIC VALUES
+    BASE_SHAPE_TIME = 30.0   # Realistic: flow matching takes ~30s for shape generation
+    BASE_TEXTURE_TIME = 270.0  # Realistic: texture generation takes ~4.5 minutes
     
     # === Shape Generation Time ===
     
-    # Inference steps impact (linear)
-    steps_multiplier = num_inference_steps / 50.0
+    # Inference steps impact (linear) - updated baseline to 30 steps
+    steps_multiplier = num_inference_steps / 30.0
     
     # Guidance scale impact (CFG requires 2x forward passes)
     guidance_multiplier = 1.0 if guidance_scale <= 1.0 else 1.8
@@ -203,10 +203,10 @@ def format_time(seconds: float) -> str:
 PERFORMANCE_PRESETS = {
     "speed": {
         "name": "⚡ Speed Mode",
-        "description": "Fastest generation (~10s)",
+        "description": "Fastest generation (~2 min)",
         "params": {
-            "steps": 30,
-            "guidance_scale": 5.0,
+            "steps": 20,
+            "guidance_scale": 2.0,
             "mesh_decode_resolution": 48,
             "paint_resolution": 256,
             "render_size": 512,
@@ -215,10 +215,10 @@ PERFORMANCE_PRESETS = {
     },
     "balanced": {
         "name": "⚖️ Balanced",
-        "description": "Good quality & speed (~20s)",
+        "description": "Good quality & speed (~5 min)",
         "params": {
-            "steps": 50,
-            "guidance_scale": 7.5,
+            "steps": 30,
+            "guidance_scale": 3.0,
             "mesh_decode_resolution": 64,
             "paint_resolution": 512,
             "render_size": 1024,
@@ -227,7 +227,7 @@ PERFORMANCE_PRESETS = {
     },
     "quality": {
         "name": "⭐ High Quality",
-        "description": "Best results (~45s)",
+        "description": "Best results (~10 min)",
         "params": {
             "steps": 75,
             "guidance_scale": 10.0,
@@ -239,7 +239,7 @@ PERFORMANCE_PRESETS = {
     },
     "ultra": {
         "name": "🔥 Ultra Quality",
-        "description": "Maximum quality (~90s)",
+        "description": "Maximum quality (~15 min)",
         "params": {
             "steps": 100,
             "guidance_scale": 12.0,
