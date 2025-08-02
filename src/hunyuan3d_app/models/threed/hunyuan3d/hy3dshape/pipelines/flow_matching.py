@@ -12,18 +12,19 @@ from PIL import Image
 import logging
 from tqdm import tqdm
 
+# Set up logger
+logger = logging.getLogger(__name__)
+
 from ..models.autoencoders import ShapeVAE
 from ..models.denoisers.hunyuandit import HunYuanDiTPlain, DiTConfig
 from ..rembg import BackgroundRemover
 
 try:
-    from transformers import CLIPVisionModel, CLIPImageProcessor
-    CLIP_AVAILABLE = True
+    from transformers import AutoModel, AutoImageProcessor
+    DINOV2_AVAILABLE = True
 except ImportError:
-    logger.warning("CLIP not available, image conditioning will be disabled")
-    CLIP_AVAILABLE = False
-
-logger = logging.getLogger(__name__)
+    logger.warning("DINOv2 not available, image conditioning will be disabled")
+    DINOV2_AVAILABLE = False
 
 
 class Hunyuan3DDiTFlowMatchingPipeline:
@@ -35,13 +36,15 @@ class Hunyuan3DDiTFlowMatchingPipeline:
         dit: HunYuanDiTPlain,
         device: str = 'cuda',
         dtype: torch.dtype = torch.float16,
-        image_encoder_name: str = "openai/clip-vit-large-patch14"
+        image_encoder_name: str = "facebook/dinov2-giant",
+        max_generation_time: int = 3600  # Default timeout of 60 minutes
     ):
         # Force float32 for stability to avoid CUBLAS errors
         self.vae = vae.to(device).float()  # Force float32
         self.dit = dit.to(device).to(dtype)  # DiT can use fp16
         self.device = device
         self.dtype = dtype
+        self.max_generation_time = max_generation_time  # Store timeout parameter
         
         # Ensure models are in eval mode
         self.vae.eval()
@@ -74,20 +77,35 @@ class Hunyuan3DDiTFlowMatchingPipeline:
         self.rembg = BackgroundRemover()
         
         # Image encoder for conditioning
-        if CLIP_AVAILABLE:
+        if DINOV2_AVAILABLE:
             try:
-                logger.info(f"Loading image encoder: {image_encoder_name}")
-                self.image_encoder = CLIPVisionModel.from_pretrained(image_encoder_name).to(device)
-                self.image_processor = CLIPImageProcessor.from_pretrained(image_encoder_name)
+                logger.info(f"Loading DINOv2 image encoder: {image_encoder_name}")
+                self.image_encoder = AutoModel.from_pretrained(image_encoder_name).to(device)
+                self.image_processor = AutoImageProcessor.from_pretrained(image_encoder_name)
                 # Set to eval mode and appropriate dtype
                 self.image_encoder.eval()
                 if dtype == torch.float16:
                     self.image_encoder = self.image_encoder.half()
-                logger.info("Image encoder loaded successfully")
+                
+                # Add projection layer for DINOv2 embeddings (1536) to context_dim (1024)
+                # DINOv2-giant has 1536 dimensions, but the model expects 1024
+                dinov2_dim = 1536  # DINOv2-giant embedding dimension
+                context_dim = 1024  # Expected by the model
+                logger.info(f"Adding projection layer from DINOv2 dim ({dinov2_dim}) to context dim ({context_dim})")
+                self.embedding_projection = nn.Linear(dinov2_dim, context_dim).to(device).to(dtype)
+                # Initialize with identity-like weights for minimal disruption
+                nn.init.eye_(self.embedding_projection.weight[:, :min(dinov2_dim, context_dim)])
+                nn.init.zeros_(self.embedding_projection.bias)
+                # Disable gradient computation
+                for param in self.embedding_projection.parameters():
+                    param.requires_grad = False
+                
+                logger.info("DINOv2 image encoder and projection layer loaded successfully")
             except Exception as e:
-                logger.warning(f"Failed to load image encoder: {e}")
+                logger.error(f"Failed to load DINOv2: {e}")
                 self.image_encoder = None
                 self.image_processor = None
+                self.embedding_projection = None
     
     def _setup_model_optimization(self):
         """Setup model optimization with platform-specific handling"""
@@ -250,11 +268,12 @@ class Hunyuan3DDiTFlowMatchingPipeline:
         vae_params = config.get('vae', {}).get('params', {})
         dit_params = config.get('model', {}).get('params', {})
         
-        # INVESTIGATION: Keep original config to avoid tensor mismatch
-        # The model was trained with with_decoupled_ca=false, so we must keep it false
-        # BUT we need to find how image conditioning actually works in this model
-        logger.info(f"🔍 Model trained with with_decoupled_ca={dit_params.get('with_decoupled_ca', False)}")
-        logger.info("🔧 INVESTIGATING: How does this model do image conditioning without cross-attention?")
+        # Keep original config - model was trained without cross-attention
+        # Forcing it to True causes weight mismatches
+        original_setting = dit_params.get('with_decoupled_ca', False)
+        logger.info(f"🔍 Model config has with_decoupled_ca={original_setting}")
+        logger.info("📝 Keeping original config to match checkpoint weights")
+        logger.info("🔧 Using AdaLN-based conditioning instead of cross-attention")
         
         vae = ShapeVAE(**vae_params)
         dit = HunYuanDiTPlain(**dit_params)
@@ -303,6 +322,7 @@ class Hunyuan3DDiTFlowMatchingPipeline:
         
         # DIAGNOSTIC: Verify DiT configuration for image conditioning
         logger.info(f"🔧 DiT Configuration for Image Conditioning:")
+        logger.info(f"   - Using AdaLN-based conditioning: {not dit.config.with_decoupled_ca}")
         logger.info(f"   - Cross-attention enabled: {dit.config.with_decoupled_ca}")
         logger.info(f"   - Context dimension: {dit.config.context_dim}")
         logger.info(f"   - Hidden size: {dit.config.hidden_size}")
@@ -312,10 +332,13 @@ class Hunyuan3DDiTFlowMatchingPipeline:
         has_cross_attn = hasattr(dit.blocks[0], 'cross_attn') if dit.blocks else False
         logger.info(f"   - Blocks have cross-attention: {has_cross_attn}")
         
-        if dit.config.with_decoupled_ca and has_cross_attn:
-            logger.info("✅ DiT model is properly configured for image conditioning!")
+        # HunYuan3D 2.1 uses AdaLN-based conditioning (with_decoupled_ca=False)
+        if not dit.config.with_decoupled_ca:
+            logger.info("✅ DiT model is properly configured for AdaLN-based image conditioning!")
+        elif dit.config.with_decoupled_ca and has_cross_attn:
+            logger.info("✅ DiT model is configured for cross-attention-based image conditioning!")
         else:
-            logger.error("❌ DiT model may not support image conditioning properly!")
+            logger.warning("⚠️ DiT model has unusual configuration - check conditioning mechanism!")
         
         return cls(vae, dit, device, dtype, **kwargs)
     
@@ -325,19 +348,85 @@ class Hunyuan3DDiTFlowMatchingPipeline:
         self.vae = self.vae.to(device)
         self.dit = self.dit.to(device)
         return self
+        
+    def _get_available_gpu_memory(self):
+        """Get available GPU memory in GB."""
+        if not torch.cuda.is_available():
+            return 0
+        
+        try:
+            # Get available memory for current device
+            device = torch.cuda.current_device()
+            gpu_properties = torch.cuda.get_device_properties(device)
+            total_memory = gpu_properties.total_memory / (1024**3)  # Convert to GB
+            
+            # Get currently allocated memory
+            allocated_memory = torch.cuda.memory_allocated(device) / (1024**3)  # Convert to GB
+            reserved_memory = torch.cuda.memory_reserved(device) / (1024**3)  # Convert to GB
+            
+            # Calculate available memory (with some buffer)
+            available_memory = total_memory - allocated_memory - reserved_memory
+            
+            # Apply a safety factor (80% of what's reported as available)
+            available_memory *= 0.8
+            
+            logger.info(f"GPU memory - Total: {total_memory:.2f}GB, Available: {available_memory:.2f}GB")
+            return available_memory
+        except Exception as e:
+            logger.warning(f"Failed to get GPU memory info: {e}")
+            return 0
+            
+    def _get_adaptive_step_count(self, requested_steps=30):
+        """Determine appropriate step count based on hardware capabilities."""
+        # Default step counts for different memory tiers
+        high_memory_steps = requested_steps
+        medium_memory_steps = 20
+        low_memory_steps = 15
+        minimum_steps = 10
+        
+        # Memory thresholds in GB
+        high_memory_threshold = 10.0  # 10+ GB available
+        medium_memory_threshold = 6.0  # 6-10 GB available
+        low_memory_threshold = 4.0    # 4-6 GB available
+        
+        # Get available memory
+        available_memory = self._get_available_gpu_memory()
+        
+        # Determine step count based on available memory
+        if available_memory >= high_memory_threshold:
+            steps = high_memory_steps
+            memory_tier = "high"
+        elif available_memory >= medium_memory_threshold:
+            steps = medium_memory_steps
+            memory_tier = "medium"
+        elif available_memory >= low_memory_threshold:
+            steps = low_memory_steps
+            memory_tier = "low"
+        else:
+            steps = minimum_steps
+            memory_tier = "minimal"
+            
+        # Log the decision
+        if steps < requested_steps:
+            logger.warning(f"Reducing inference steps from {requested_steps} to {steps} due to limited GPU memory ({available_memory:.2f}GB, {memory_tier} tier)")
+        else:
+            logger.info(f"Using {steps} inference steps ({memory_tier} memory tier, {available_memory:.2f}GB available)")
+            
+        return steps
     
     @torch.no_grad()
     def __call__(
         self,
         image: Optional[Union[Image.Image, np.ndarray, torch.Tensor]] = None,
         prompt: Optional[str] = None,
-        num_inference_steps: int = 30,  # Reduced from 50 for faster generation
+        num_inference_steps: int = 30,  # Default value, will be adjusted based on hardware
         guidance_scale: float = 15.0,  # Increased from 3.0 to improve image conditioning effectiveness
         generator: Optional[torch.Generator] = None,
         box_v: float = 1.5,
         output_type: str = "trimesh",
         callback: Optional[callable] = None,
         callback_steps: int = 1,
+        adaptive_steps: bool = True,  # Whether to adapt step count to hardware capabilities
         **kwargs
     ) -> Union[trimesh.Trimesh, List[trimesh.Trimesh], Dict[str, Any]]:
         """Generate 3D shape from image.
@@ -417,6 +506,18 @@ class Hunyuan3DDiTFlowMatchingPipeline:
         if image_embeddings is None:
             logger.warning("No image embeddings available, generation will be unconditional")
         
+        # Adjust number of inference steps based on hardware capabilities if adaptive_steps is enabled
+        original_steps = num_inference_steps
+        if adaptive_steps:
+            num_inference_steps = self._get_adaptive_step_count(requested_steps=num_inference_steps)
+            if num_inference_steps != original_steps:
+                logger.info(f"Adjusted inference steps from {original_steps} to {num_inference_steps} based on hardware capabilities")
+                
+                # Update callback_steps if needed to ensure reasonable number of callbacks
+                if callback is not None and callback_steps > 1:
+                    callback_steps = max(1, num_inference_steps // 10)
+                    logger.info(f"Adjusted callback_steps to {callback_steps}")
+        
         # Generate latents using flow matching
         logger.info(f"Starting latent generation with {num_inference_steps} steps...")
         try:
@@ -479,29 +580,42 @@ class Hunyuan3DDiTFlowMatchingPipeline:
         return image_tensor
     
     def _encode_image(self, image: Image.Image) -> Optional[torch.Tensor]:
-        """Encode image to embeddings using CLIP vision encoder."""
-        if self.image_encoder is None or self.image_processor is None:
-            logger.warning("Image encoder not available, returning None")
+        """Encode image using DINOv2 and project to expected dimension."""
+        if self.image_encoder is None or self.image_processor is None or self.embedding_projection is None:
+            logger.warning("Image encoder or projection layer not available, returning None")
             return None
         
         try:
-            # Process image for CLIP
-            inputs = self.image_processor(images=image, return_tensors="pt")
-            pixel_values = inputs["pixel_values"].to(self.device)
+            # Process image for DINOv2
+            inputs = self.image_processor(images=image, return_tensors="pt").to(self.device)
             
             # Get image features
             with torch.no_grad():
-                outputs = self.image_encoder(pixel_values)
-                # Use the last hidden state as image features
-                image_features = outputs.last_hidden_state  # Shape: (1, num_patches, hidden_size)
+                # DINOv2 returns last_hidden_state directly
+                outputs = self.image_encoder(**inputs)
+                image_embeddings = outputs.last_hidden_state  # (1, num_patches+1, embed_dim)
                 
                 # Convert to appropriate dtype
-                image_features = image_features.to(self.dtype)
+                image_embeddings = image_embeddings.to(self.dtype)
+                
+                # Log original embedding shape
+                logger.info(f"Original DINOv2 embeddings shape: {image_embeddings.shape}")
+                
+                # Project embeddings to expected dimension
+                # Apply projection to each token embedding
+                B, L, D = image_embeddings.shape
+                image_embeddings_flat = image_embeddings.reshape(-1, D)  # Flatten to (B*L, D)
+                projected_embeddings_flat = self.embedding_projection(image_embeddings_flat)  # Project to (B*L, context_dim)
+                projected_embeddings = projected_embeddings_flat.reshape(B, L, -1)  # Reshape back to (B, L, context_dim)
+                
+                # Log projected embedding shape
+                logger.info(f"Projected embeddings shape: {projected_embeddings.shape}")
             
-            return image_features
+            return projected_embeddings
             
         except Exception as e:
             logger.error(f"Failed to encode image: {e}")
+            logger.exception(e)  # Print full traceback for debugging
             return None
     
     def _generate_latents(
@@ -538,15 +652,34 @@ class Hunyuan3DDiTFlowMatchingPipeline:
         
         import time
         loop_start_time = time.time()
-        max_loop_time = 1200  # 20 minutes max for debugging (will optimize model performance)
+        max_step_time = 300  # 5 minutes max per step to prevent indefinite hangs
+        
+        # Calculate average time per step to provide better estimates
+        avg_step_time = None
+        remaining_time_estimate = "unknown"
         
         for i, (t_curr, t_next) in enumerate(zip(timesteps[:-1], timesteps[1:])):
-            # Check for timeout every 10 steps
-            if i % 10 == 0:
-                elapsed = time.time() - loop_start_time
-                if elapsed > max_loop_time:
-                    raise TimeoutError(f"Flow matching timed out after {elapsed:.1f}s at step {i}/{len(timesteps)-1}")
-                logger.info(f"Flow matching step {i+1}/{len(timesteps)-1}")
+            # Check for timeout
+            elapsed = time.time() - loop_start_time
+            
+            # Update average step time and estimate remaining time
+            if i > 0:
+                avg_step_time = elapsed / i if avg_step_time is None else avg_step_time * 0.8 + (elapsed / i) * 0.2
+                steps_remaining = len(timesteps) - i - 1
+                if avg_step_time is not None:
+                    remaining_time_estimate = f"{avg_step_time * steps_remaining:.1f}s"
+            
+            # Log progress more frequently for long-running generations
+            if i % 5 == 0 or elapsed > 600:  # Every 5 steps or after 10 minutes
+                logger.info(f"Flow matching step {i+1}/{len(timesteps)-1} (elapsed: {elapsed:.1f}s, est. remaining: {remaining_time_estimate})")
+            
+            # Check for global timeout
+            if elapsed > self.max_generation_time:
+                logger.error(f"Flow matching exceeded maximum allowed time of {self.max_generation_time}s")
+                raise TimeoutError(f"Flow matching timed out after {elapsed:.1f}s at step {i}/{len(timesteps)-1}")
+            
+            # Track time for this specific step
+            step_start_time = time.time()
             
             # Expand timestep and ensure correct dtype
             t_batch = t_curr.expand(B).to(dtype=self.dtype)
@@ -555,9 +688,9 @@ class Hunyuan3DDiTFlowMatchingPipeline:
             step_start_time = time.time()
             with torch.no_grad():
                 try:
-                    # DIAGNOSTIC: Log image conditioning status every 5 steps
-                    if i % 5 == 0:
-                        logger.info(f"🖼️  Step {i+1}: Image conditioning status:")
+                    # DIAGNOSTIC: Log image conditioning status only at the beginning and for troubleshooting
+                    if i == 0:
+                        logger.info(f"🖼️  Image conditioning status:")
                         logger.info(f"   - Image embeddings: {image_embeddings.shape if image_embeddings is not None else 'None'}")
                         if image_embeddings is not None:
                             img_norm = torch.norm(image_embeddings).item() 
@@ -566,7 +699,9 @@ class Hunyuan3DDiTFlowMatchingPipeline:
                             logger.info(f"   - Image embedding stats: norm={img_norm:.3f}, mean={img_mean:.3f}, std={img_std:.3f}")
                         logger.info(f"   - Guidance scale: {guidance_scale}")
                         logger.info(f"   - Using CFG: {guidance_scale > 1.0 and image_embeddings is not None}")
-                        logger.info(f"   - DiT cross-attention enabled: {hasattr(self.dit, 'config') and getattr(self.dit.config, 'with_decoupled_ca', False)}")
+                        # Check conditioning mechanism
+                        has_decoupled_ca = hasattr(self.dit, 'config') and getattr(self.dit.config, 'with_decoupled_ca', False)
+                        logger.info(f"   - Conditioning mechanism: {'Cross-attention' if has_decoupled_ca else 'AdaLN-based'}")
                         
                         # Verify image embeddings are meaningful and not all zeros
                         if image_embeddings is not None:
@@ -577,14 +712,23 @@ class Hunyuan3DDiTFlowMatchingPipeline:
                     
                     if guidance_scale > 1.0 and image_embeddings is not None:
                         # Classifier-free guidance: run both conditional and unconditional
-                        if i % 5 == 0:
+                        if i == 0:
                             logger.info(f"🔄 Running CFG: conditional + unconditional forward passes")
+                        
+                        # Memory optimization: explicitly free memory before each forward pass
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                            
                         cond_start = time.time()
                         # Ensure image_embeddings has the correct dtype
                         image_embeddings_typed = image_embeddings.to(dtype=self.dtype)
                         velocity_cond = self.dit(latents, t_batch, context=image_embeddings_typed)
                         cond_time = time.time() - cond_start
                         
+                        # Memory optimization: explicitly free memory before unconditional pass
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                            
                         uncond_start = time.time()
                         # CRITICAL FIX: Use zero embeddings for proper unconditional generation
                         # The DiT model will detect this is a null context and skip conditioning
@@ -596,8 +740,8 @@ class Hunyuan3DDiTFlowMatchingPipeline:
                         # Apply guidance
                         velocity = velocity_uncond + guidance_scale * (velocity_cond - velocity_uncond)
                         
-                        # DIAGNOSTIC: Verify guidance is being applied
-                        if i % 5 == 0:
+                        # DIAGNOSTIC: Verify guidance is being applied (only at start and occasionally)
+                        if i == 0 or i % 10 == 0:
                             cond_norm = torch.norm(velocity_cond).item()
                             uncond_norm = torch.norm(velocity_uncond).item()
                             final_norm = torch.norm(velocity).item()
@@ -605,23 +749,42 @@ class Hunyuan3DDiTFlowMatchingPipeline:
                             if abs(cond_norm - uncond_norm) < 0.001:
                                 logger.warning("⚠️  Conditional and unconditional outputs are nearly identical - image conditioning may not be working!")
                         
-                        logger.debug(f"CFG times - Conditional: {cond_time:.2f}s, Unconditional: {uncond_time:.2f}s")
+                        # Only log timing details at the beginning to reduce overhead
+                        if i == 0:
+                            logger.info(f"CFG times - Conditional: {cond_time:.2f}s, Unconditional: {uncond_time:.2f}s")
                     else:
                         # Normal generation with or without conditioning
-                        if i % 5 == 0:
+                        if i == 0:
                             logger.info(f"🔄 Running single forward pass with {'image' if image_embeddings is not None else 'no'} conditioning")
+                        
+                        # Memory optimization: explicitly free memory before forward pass
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                            
                         single_start = time.time()
                         velocity = self.dit(latents, t_batch, context=image_embeddings)
                         single_time = time.time() - single_start
-                        logger.debug(f"Single forward pass: {single_time:.2f}s")
+                        
+                        # Only log timing details at the beginning to reduce overhead
+                        if i == 0:
+                            logger.info(f"Single forward pass: {single_time:.2f}s")
                 except Exception as e:
                     logger.error(f"DiT model forward pass failed at step {i}: {e}")
                     raise
             
             step_time = time.time() - step_start_time
-            if step_time > 5.0:  # Log slow steps
+            
+            # Check for step-specific timeout
+            if step_time > max_step_time:
+                logger.error(f"Step {i+1} exceeded maximum allowed time of {max_step_time}s (took {step_time:.2f}s)")
+                logger.error(f"This may indicate insufficient GPU memory or other hardware limitations")
+                logger.error(f"Consider reducing the number of inference steps or using a smaller model")
+                raise TimeoutError(f"Flow matching step {i+1} timed out after {step_time:.2f}s (limit: {max_step_time}s)")
+            elif step_time > 60.0:  # Log very slow steps (over 1 minute)
+                logger.warning(f"Very slow step {i+1}: {step_time:.2f}s - generation may take a long time to complete")
+            elif step_time > 5.0:  # Log moderately slow steps
                 logger.warning(f"Slow step {i+1}: {step_time:.2f}s (DiT model may be inefficient)")
-            elif i % 10 == 0:
+            elif i % 5 == 0:  # Log regular progress
                 logger.info(f"Step {i+1} completed in {step_time:.2f}s")
             
             # Update latents (Euler step)

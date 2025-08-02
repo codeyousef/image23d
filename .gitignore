@@ -165,3 +165,16 @@ docs/_templates/
 /test_comprehensive_output/test_square_mesh.obj
 /test_comprehensive_output/test_triangle_image.png
 /test_comprehensive_output/test_triangle_mesh.obj
+/test_cfg_output/test_circle_image.png
+/test_cfg_output/test_circle_mesh.obj
+/test_cfg_output/test_circle_nocfg_image.png
+/test_cfg_output/test_circle_nocfg_mesh.obj
+/test_cfg_output/test_square_image.png
+/test_cfg_output/test_square_mesh.obj
+/test_cfg_output/test_square_nocfg_image.png
+/test_cfg_output/test_square_nocfg_mesh.obj
+/test_cfg_output/test_triangle_image.png
+/test_cfg_output/test_triangle_mesh.obj
+/test_cfg_output/test_triangle_nocfg_image.png
+/test_cfg_output/test_triangle_nocfg_mesh.obj
+/TEXTURE_GENERATION_FIXES.md
