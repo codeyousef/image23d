@@ -179,14 +179,28 @@ class Hunyuan3DDiTFlowMatchingPipeline:
         if dit_config_path.exists():
             with open(dit_config_path, 'r') as f:
                 dit_cfg = yaml.safe_load(f)
-            dit_params = dit_cfg['model']['params']
+            # Handle different config structures
+            if 'model' in dit_cfg and 'params' in dit_cfg['model']:
+                dit_params = dit_cfg['model']['params']
+            elif 'params' in dit_cfg:
+                dit_params = dit_cfg['params']
+            else:
+                dit_params = {}
+                logger.warning(f"Could not find DiT params in config: {dit_config_path}")
         else:
             dit_params = {}
         
         if vae_config_path.exists():
             with open(vae_config_path, 'r') as f:
                 vae_cfg = yaml.safe_load(f)
-            vae_params = vae_cfg['vae']['params']
+            # Handle different config structures
+            if 'vae' in vae_cfg and 'params' in vae_cfg['vae']:
+                vae_params = vae_cfg['vae']['params']
+            elif 'params' in vae_cfg:
+                vae_params = vae_cfg['params']
+            else:
+                vae_params = {}
+                logger.warning(f"Could not find VAE params in config: {vae_config_path}")
         else:
             vae_params = {}
         
@@ -507,13 +521,17 @@ class Hunyuan3DDiTFlowMatchingPipeline:
         if generator is not None:
             torch.manual_seed(generator.initial_seed())
         
+        # Ensure latents have the correct dtype
         latents = torch.randn(
             B, self.vae.num_latents, self.vae.embed_dim,
             device=self.device, dtype=self.dtype
         )
+        # Double-check dtype to ensure consistency
+        latents = latents.to(dtype=self.dtype)
         
         # Create timesteps (flow matching uses continuous time)
-        timesteps = torch.linspace(1.0, 0.0, num_inference_steps + 1, device=self.device)
+        # Ensure timesteps have the correct dtype
+        timesteps = torch.linspace(1.0, 0.0, num_inference_steps + 1, device=self.device, dtype=self.dtype)
         
         # Flow matching loop with timeout protection
         logger.info(f"Starting flow matching loop with {len(timesteps)-1} steps")
@@ -530,8 +548,8 @@ class Hunyuan3DDiTFlowMatchingPipeline:
                     raise TimeoutError(f"Flow matching timed out after {elapsed:.1f}s at step {i}/{len(timesteps)-1}")
                 logger.info(f"Flow matching step {i+1}/{len(timesteps)-1}")
             
-            # Expand timestep
-            t_batch = t_curr.expand(B)
+            # Expand timestep and ensure correct dtype
+            t_batch = t_curr.expand(B).to(dtype=self.dtype)
             
             # Predict velocity (flow) with image conditioning
             step_start_time = time.time()
@@ -562,12 +580,16 @@ class Hunyuan3DDiTFlowMatchingPipeline:
                         if i % 5 == 0:
                             logger.info(f"🔄 Running CFG: conditional + unconditional forward passes")
                         cond_start = time.time()
-                        velocity_cond = self.dit(latents, t_batch, context=image_embeddings)
+                        # Ensure image_embeddings has the correct dtype
+                        image_embeddings_typed = image_embeddings.to(dtype=self.dtype)
+                        velocity_cond = self.dit(latents, t_batch, context=image_embeddings_typed)
                         cond_time = time.time() - cond_start
                         
                         uncond_start = time.time()
-                        # CRITICAL FIX: Use zero embeddings instead of None for proper unconditional generation
-                        null_context = torch.zeros_like(image_embeddings)
+                        # CRITICAL FIX: Use zero embeddings for proper unconditional generation
+                        # The DiT model will detect this is a null context and skip conditioning
+                        # Ensure all tensors have the same dtype to avoid type mismatch errors
+                        null_context = torch.zeros_like(image_embeddings).to(dtype=self.dtype)
                         velocity_uncond = self.dit(latents, t_batch, context=null_context)
                         uncond_time = time.time() - uncond_start
                         

@@ -5,6 +5,8 @@ import torch
 import numpy as np
 import trimesh
 import logging
+import time
+import gc
 from typing import Optional, Dict, Any, Tuple, Union, List
 from pathlib import Path
 from PIL import Image
@@ -14,6 +16,45 @@ from .config import HunYuan3DConfig, MODEL_VARIANTS
 from .utils import validate_device, get_optimal_dtype
 from ..base import Base3DModel
 from ..memory import optimize_memory_usage
+
+def safe_delete_file(file_path, max_retries=5, retry_delay=1.0):
+    """Safely delete a file with retries for Windows file locking issues.
+    
+    Args:
+        file_path: Path to the file to delete
+        max_retries: Maximum number of deletion attempts
+        retry_delay: Delay between retry attempts in seconds
+        
+    Returns:
+        bool: True if deletion was successful, False otherwise
+    """
+    logger = logging.getLogger(__name__)
+    
+    if not os.path.exists(file_path):
+        return True
+        
+    # Force garbage collection to release any file handles
+    gc.collect()
+    
+    for attempt in range(max_retries):
+        try:
+            # Try to close any open handles (Windows-specific approach)
+            if os.name == 'nt':  # Windows
+                # Release file from image processing if it's an image
+                if file_path.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    Image.core.clear_cache()  # Clear PIL's internal cache
+            
+            # Attempt to delete the file
+            os.unlink(file_path)
+            logger.debug(f"Successfully deleted temporary file: {file_path}")
+            return True
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logger.debug(f"Deletion attempt {attempt+1} failed for {file_path}: {e}")
+                time.sleep(retry_delay)  # Wait before retrying
+            else:
+                logger.warning(f"Failed to delete {file_path} after {max_retries} attempts: {e}")
+                return False
 
 logger = logging.getLogger(__name__)
 
@@ -341,14 +382,19 @@ class HunYuan3DTexture(Base3DModel):
                     raise RuntimeError(f"Paint pipeline did not generate output at {textured_mesh_path}")
                     
             finally:
-                # Clean up temporary files
-                try:
-                    if os.path.exists(temp_mesh_path):
-                        os.unlink(temp_mesh_path)
-                    if os.path.exists(temp_image_path):
-                        os.unlink(temp_image_path)
-                except Exception as cleanup_error:
-                    logger.warning(f"Failed to clean up temporary files: {cleanup_error}")
+                # Clean up temporary files with robust retry mechanism
+                cleanup_failures = []
+                
+                # Try to clean up each file using the safe_delete_file helper
+                if not safe_delete_file(temp_mesh_path):
+                    cleanup_failures.append(temp_mesh_path)
+                    
+                if not safe_delete_file(temp_image_path):
+                    cleanup_failures.append(temp_image_path)
+                
+                if cleanup_failures:
+                    logger.warning(f"Failed to clean up temporary files: {cleanup_failures}")
+                    logger.info("These files will be cleaned up on system restart or can be manually deleted")
             
             if progress_callback:
                 progress_callback("texture_generation", 1.0, f"Generated textured mesh with {len(texture_maps)} texture maps")
