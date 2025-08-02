@@ -255,24 +255,24 @@ class ThreeDGenerator:
             # Get generation time
             generation_time = time.time() - start_time
             
-            # CRITICAL FIX: Use actual input image as preview instead of mesh render
+            # CRITICAL FIX: Use rendered 3D model preview instead of input image
             preview_image = None
             try:
-                # Use the actual input image that was processed, not a mesh render
-                # This fixes the user's complaint: "preview.png and generated image in the cache have nothing to do with each other"
-                if isinstance(image, Image.Image):
-                    preview_image = image.copy()  # Use the actual input image
-                    logger.info(f"✅ Using actual input image as preview: {image.size}, {image.mode}")
-                    
-                    # Track the preview image hash for debugging
-                    import hashlib
-                    if hasattr(preview_image, 'tobytes'):
-                        preview_hash = hashlib.md5(preview_image.tobytes()).hexdigest()[:8]
-                        logger.info(f"🌼 [3D_GENERATION] Preview image hash: {preview_hash}")
-                else:
-                    # Fallback to mesh render only if no input image available
-                    logger.info("No input image available, falling back to mesh render for preview")
-                    preview_image = self._create_preview(result)
+                # Create a preview image from the 3D model result
+                logger.info("Creating preview image from 3D model result")
+                preview_image = self._create_preview(result)
+                
+                # Track the preview image hash for debugging
+                import hashlib
+                if preview_image and hasattr(preview_image, 'tobytes'):
+                    preview_hash = hashlib.md5(preview_image.tobytes()).hexdigest()[:8]
+                    logger.info(f"🌼 [3D_GENERATION] Preview image hash: {preview_hash}")
+                
+                # Fallback to input image only if preview creation fails
+                if preview_image is None and isinstance(image, Image.Image):
+                    logger.warning("Failed to create 3D model preview, falling back to input image")
+                    preview_image = image.copy()
+                    logger.info(f"Using input image as fallback preview: {image.size}, {image.mode}")
             except Exception as e:
                 logger.warning(f"Failed to create preview image: {e}")
                 preview_image = None

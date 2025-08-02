@@ -318,7 +318,7 @@ class Hunyuan3DDiTFlowMatchingPipeline:
         image: Optional[Union[Image.Image, np.ndarray, torch.Tensor]] = None,
         prompt: Optional[str] = None,
         num_inference_steps: int = 30,  # Reduced from 50 for faster generation
-        guidance_scale: float = 3.0,  # Reduced from 7.5 to avoid expensive CFG
+        guidance_scale: float = 15.0,  # Increased from 3.0 to improve image conditioning effectiveness
         generator: Optional[torch.Generator] = None,
         box_v: float = 1.5,
         output_type: str = "trimesh",
@@ -566,7 +566,9 @@ class Hunyuan3DDiTFlowMatchingPipeline:
                         cond_time = time.time() - cond_start
                         
                         uncond_start = time.time()
-                        velocity_uncond = self.dit(latents, t_batch, context=None)
+                        # CRITICAL FIX: Use zero embeddings instead of None for proper unconditional generation
+                        null_context = torch.zeros_like(image_embeddings)
+                        velocity_uncond = self.dit(latents, t_batch, context=null_context)
                         uncond_time = time.time() - uncond_start
                         
                         # Apply guidance

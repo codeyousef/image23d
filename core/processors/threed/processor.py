@@ -260,10 +260,8 @@ class ThreeDProcessor:
                 import hashlib
                 image_hash = hashlib.md5(generation_input.tobytes()).hexdigest()[:8]
                 logger.info(f"📸 [PROCESSOR] Placeholder generation input hash: {image_hash}")
-                # Save the placeholder for comparison
-                placeholder_path = output_subdir / f"DEBUG_placeholder_{image_hash}.png"
-                generation_input.save(placeholder_path)
-                logger.info(f"📁 [PROCESSOR] Saved placeholder image to: {placeholder_path}")
+                # Don't save debug placeholder images to avoid confusion with preview images
+                logger.info(f"🔍 [PROCESSOR] Using placeholder image for 3D generation (not saving to disk)")
             
             if progress_callback:
                 progress_callback("generate", 0.18, "Text-to-image completed, starting 3D generation...")
@@ -337,14 +335,11 @@ class ThreeDProcessor:
         
         logger.info(f"📁 [PROCESSOR] Total preview images saved: {len(preview_images)}")
         
-        # CRITICAL: Create a summary of all saved images for debugging
+        # CRITICAL: Create a summary of all saved images
         logger.info(f"📈 [PROCESSOR] IMAGE FLOW SUMMARY:")
-        debug_files = list(output_subdir.glob("DEBUG_*"))
-        for debug_file in debug_files:
-            logger.info(f"   - {debug_file.name}")
         if preview_images:
             for preview_path in preview_images:
-                logger.info(f"   - FINAL: {preview_path.name}")
+                logger.info(f"   - {preview_path.name}")
         
         # Handle export formats
         export_paths = {}

@@ -157,3 +157,11 @@ docs/_templates/
 /test_outputs/
 /models/
 /GEMINI.md
+/HUNYUAN3D_FIXES.md
+/test_comprehensive_output/test_circle_image.png
+/test_comprehensive_output/test_circle_mesh.obj
+/test_fixes_output/test_input.png
+/test_comprehensive_output/test_square_image.png
+/test_comprehensive_output/test_square_mesh.obj
+/test_comprehensive_output/test_triangle_image.png
+/test_comprehensive_output/test_triangle_mesh.obj
