@@ -595,8 +595,8 @@ class Hunyuan3DDiTFlowMatchingPipeline:
                 outputs = self.image_encoder(**inputs)
                 image_embeddings = outputs.last_hidden_state  # (1, num_patches+1, embed_dim)
                 
-                # Convert to appropriate dtype
-                image_embeddings = image_embeddings.to(self.dtype)
+                # CRITICAL FIX: Convert to appropriate device and dtype
+                image_embeddings = image_embeddings.to(device=self.device, dtype=self.dtype)
                 
                 # Log original embedding shape
                 logger.info(f"Original DINOv2 embeddings shape: {image_embeddings.shape}")
@@ -605,8 +605,15 @@ class Hunyuan3DDiTFlowMatchingPipeline:
                 # Apply projection to each token embedding
                 B, L, D = image_embeddings.shape
                 image_embeddings_flat = image_embeddings.reshape(-1, D)  # Flatten to (B*L, D)
+                
+                # CRITICAL FIX: Ensure embeddings are on same device as projection layer
+                image_embeddings_flat = image_embeddings_flat.to(device=self.embedding_projection.weight.device, 
+                                                               dtype=self.embedding_projection.weight.dtype)
                 projected_embeddings_flat = self.embedding_projection(image_embeddings_flat)  # Project to (B*L, context_dim)
                 projected_embeddings = projected_embeddings_flat.reshape(B, L, -1)  # Reshape back to (B, L, context_dim)
+                
+                # CRITICAL FIX: Ensure final embeddings are on correct device and dtype
+                projected_embeddings = projected_embeddings.to(device=self.device, dtype=self.dtype)
                 
                 # Log projected embedding shape
                 logger.info(f"Projected embeddings shape: {projected_embeddings.shape}")
@@ -740,14 +747,43 @@ class Hunyuan3DDiTFlowMatchingPipeline:
                         # Apply guidance
                         velocity = velocity_uncond + guidance_scale * (velocity_cond - velocity_uncond)
                         
-                        # DIAGNOSTIC: Verify guidance is being applied (only at start and occasionally)
+                        # ENHANCED: Comprehensive diagnostic logging for conditioning effectiveness
                         if i == 0 or i % 10 == 0:
                             cond_norm = torch.norm(velocity_cond).item()
                             uncond_norm = torch.norm(velocity_uncond).item()
                             final_norm = torch.norm(velocity).item()
-                            logger.info(f"🎯 CFG effectiveness: Conditional={cond_norm:.3f}, Unconditional={uncond_norm:.3f}, Final={final_norm:.3f}")
-                            if abs(cond_norm - uncond_norm) < 0.001:
-                                logger.warning("⚠️  Conditional and unconditional outputs are nearly identical - image conditioning may not be working!")
+                            
+                            # Calculate conditioning effectiveness metrics
+                            conditioning_difference = abs(cond_norm - uncond_norm)
+                            conditioning_ratio = cond_norm / uncond_norm if uncond_norm > 0 else float('inf')
+                            guidance_strength = abs(final_norm - uncond_norm) / uncond_norm if uncond_norm > 0 else 0
+                            
+                            logger.info(f"🎯 ENHANCED CFG Effectiveness Analysis:")
+                            logger.info(f"   - Conditional norm: {cond_norm:.3f}")
+                            logger.info(f"   - Unconditional norm: {uncond_norm:.3f}")
+                            logger.info(f"   - Final guided norm: {final_norm:.3f}")
+                            logger.info(f"   - Conditioning difference: {conditioning_difference:.3f}")
+                            logger.info(f"   - Conditioning ratio: {conditioning_ratio:.3f}")
+                            logger.info(f"   - Guidance strength: {guidance_strength:.3f}")
+                            
+                            # Enhanced diagnostic thresholds
+                            if conditioning_difference < 0.001:
+                                logger.error("❌ CRITICAL: Conditional and unconditional outputs are nearly identical!")
+                                logger.error("   This indicates image conditioning is NOT working at all.")
+                                logger.error("   Check: DINOv2 features, projection layer, AdaLN scaling")
+                            elif conditioning_difference < 0.01:
+                                logger.warning("⚠️  WARNING: Very weak conditioning difference detected.")
+                                logger.warning("   Image conditioning may be too weak to influence generation.")
+                            elif conditioning_difference < 0.1:
+                                logger.info("ℹ️  Moderate conditioning difference - image influence is present but may be weak.")
+                            else:
+                                logger.info("✅ STRONG conditioning difference detected - image conditioning is working!")
+                            
+                            # Check guidance effectiveness
+                            if guidance_strength < 0.1:
+                                logger.warning("⚠️  Low guidance strength - CFG may not be effective.")
+                            else:
+                                logger.info(f"✅ Good guidance strength: {guidance_strength:.1%} change from unconditional")
                         
                         # Only log timing details at the beginning to reduce overhead
                         if i == 0:
